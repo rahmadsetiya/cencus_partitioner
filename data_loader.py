@@ -9,6 +9,7 @@ Fungsi utama:
 
 import logging
 from pathlib import Path
+
 import geopandas as gpd
 import pandas as pd
 from shapely.validation import make_valid
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # PUBLIC FUNCTION
 # =============================================================================
+
 
 def load_geojson(filepath: str) -> gpd.GeoDataFrame:
     """
@@ -86,9 +88,7 @@ def load_geojson(filepath: str) -> gpd.GeoDataFrame:
     # -------------------------------------------------------------------------
     # 5. Pastikan muatan bertipe numerik dan tidak negatif
     # -------------------------------------------------------------------------
-    gdf[config.COL_MUATAN] = pd.to_numeric(
-        gdf[config.COL_MUATAN], errors="coerce"
-    ).fillna(0)
+    gdf[config.COL_MUATAN] = pd.to_numeric(gdf[config.COL_MUATAN], errors="coerce").fillna(0)
 
     n_zero = (gdf[config.COL_MUATAN] <= 0).sum()
     if n_zero > 0:
@@ -104,8 +104,7 @@ def load_geojson(filepath: str) -> gpd.GeoDataFrame:
     if dupes.any():
         n_dupes = dupes.sum()
         logger.warning(
-            f"  {n_dupes} kode_sls duplikat ditemukan. "
-            f"Suffix _dup ditambahkan untuk membedakan."
+            f"  {n_dupes} kode_sls duplikat ditemukan. Suffix _dup ditambahkan untuk membedakan."
         )
         # Buat kode_sls unik dengan menambahkan suffix
         kode_col = config.COL_KODE_SLS
@@ -125,8 +124,7 @@ def load_geojson(filepath: str) -> gpd.GeoDataFrame:
     gdf = gdf.reset_index(drop=True)
 
     logger.info(
-        f"  Data berhasil dimuat: {len(gdf)} SLS, "
-        f"total muatan = {gdf[config.COL_MUATAN].sum():,}"
+        f"  Data berhasil dimuat: {len(gdf)} SLS, total muatan = {gdf[config.COL_MUATAN].sum():,}"
     )
     return gdf
 
@@ -135,16 +133,14 @@ def load_geojson(filepath: str) -> gpd.GeoDataFrame:
 # PRIVATE HELPERS
 # =============================================================================
 
+
 def _validate_required_columns(gdf: gpd.GeoDataFrame) -> None:
     """Pastikan kolom wajib ada di GeoDataFrame."""
     required = [config.COL_KODE_SLS, config.COL_MUATAN]
     missing = [col for col in required if col not in gdf.columns]
     if missing:
         available = list(gdf.columns)
-        raise ValueError(
-            f"Kolom wajib tidak ditemukan: {missing}. "
-            f"Kolom tersedia: {available}"
-        )
+        raise ValueError(f"Kolom wajib tidak ditemukan: {missing}. Kolom tersedia: {available}")
 
 
 def _repair_geometries(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
@@ -166,9 +162,8 @@ def _repair_geometries(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     logger.info(f"  Memperbaiki {n_invalid} geometry yang tidak valid...")
 
     repaired = gdf.copy()
-    repaired.loc[invalid_mask, "geometry"] = (
-        repaired.loc[invalid_mask, "geometry"]
-        .apply(make_valid)
+    repaired.loc[invalid_mask, "geometry"] = repaired.loc[invalid_mask, "geometry"].apply(
+        make_valid
     )
 
     # Cek ulang setelah repair

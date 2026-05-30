@@ -51,8 +51,8 @@ TOUCHING_ONLY = False
 #           + WEIGHT_TOUCHING * (0 jika touching, 1 jika tidak)
 # Makin kecil weight → akses makin mudah.
 
-WEIGHT_DISTANCE   = 1.0   # bobot untuk jarak jalan (km)
-WEIGHT_TOUCHING   = 0.5   # penalti jika polygon tidak bersinggungan langsung
+WEIGHT_DISTANCE = 1.0  # bobot untuk jarak jalan (km)
+WEIGHT_TOUCHING = 0.5  # penalti jika polygon tidak bersinggungan langsung
 
 # Jika OSM gagal, edge dari polygon touching diberi weight default ini (km).
 DEFAULT_TOUCHING_WEIGHT = 1.0
@@ -88,9 +88,9 @@ EPSG_GEO = 4326
 # OUTPUT SETTINGS
 # =============================================================================
 
-OUTPUT_EXCEL   = "hasil_partisi.xlsx"
+OUTPUT_EXCEL = "hasil_partisi.xlsx"
 OUTPUT_MAP_HTML = "peta_partisi.html"
 
 # Nama kolom wajib di GeoJSON
 COL_KODE_SLS = "kode_sls"
-COL_MUATAN   = "muatan"
+COL_MUATAN = "muatan"

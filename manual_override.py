@@ -18,27 +18,28 @@ Sheet "force_disconnect":
 
 import logging
 from pathlib import Path
-from typing import Optional
-import pandas as pd
+
 import networkx as nx
+import pandas as pd
 
 import config
 
 logger = logging.getLogger(__name__)
 
 # Nama sheet di file Excel
-SHEET_CONNECT    = "force_connect"
+SHEET_CONNECT = "force_connect"
 SHEET_DISCONNECT = "force_disconnect"
 
 # Nama kolom wajib di tiap sheet
-COL_A    = "kode_sls_a"
-COL_B    = "kode_sls_b"
+COL_A = "kode_sls_a"
+COL_B = "kode_sls_b"
 COL_NOTE = "catatan"
 
 
 # =============================================================================
 # PUBLIC FUNCTION
 # =============================================================================
+
 
 def apply_manual_override(G: nx.Graph, filepath: str) -> nx.Graph:
     """
@@ -83,9 +84,7 @@ def apply_manual_override(G: nx.Graph, filepath: str) -> nx.Graph:
                 continue
 
             if G.has_edge(kode_a, kode_b):
-                logger.debug(
-                    f"  [override] Edge {kode_a}↔{kode_b} sudah ada, dilewati."
-                )
+                logger.debug(f"  [override] Edge {kode_a}↔{kode_b} sudah ada, dilewati.")
                 continue
 
             # Tambahkan edge dengan weight kecil (akses mudah via manual)
@@ -99,8 +98,7 @@ def apply_manual_override(G: nx.Graph, filepath: str) -> nx.Graph:
                 catatan=str(catatan),
             )
             logger.info(
-                f"  [FORCE CONNECT] {kode_a} ↔ {kode_b}"
-                + (f" ({catatan})" if catatan else "")
+                f"  [FORCE CONNECT] {kode_a} ↔ {kode_b}" + (f" ({catatan})" if catatan else "")
             )
             n_connected += 1
 
@@ -119,31 +117,24 @@ def apply_manual_override(G: nx.Graph, filepath: str) -> nx.Graph:
 
             if not G.has_edge(kode_a, kode_b):
                 logger.debug(
-                    f"  [override] Edge {kode_a}↔{kode_b} tidak ada, "
-                    f"tidak perlu disconnect."
+                    f"  [override] Edge {kode_a}↔{kode_b} tidak ada, tidak perlu disconnect."
                 )
                 continue
 
-            # Simpan info edge sebelum dihapus untuk log
-            edge_data = G.edges[kode_a, kode_b]
-
             G.remove_edge(kode_a, kode_b)
             logger.info(
-                f"  [FORCE DISCONNECT] {kode_a} ↔ {kode_b}"
-                + (f" ({catatan})" if catatan else "")
+                f"  [FORCE DISCONNECT] {kode_a} ↔ {kode_b}" + (f" ({catatan})" if catatan else "")
             )
             n_disconnected += 1
 
             # Cek apakah force disconnect membuat node terisolasi
             if G.degree(kode_a) == 0:
                 logger.warning(
-                    f"  PERINGATAN: {kode_a} menjadi isolated node "
-                    f"setelah force disconnect!"
+                    f"  PERINGATAN: {kode_a} menjadi isolated node setelah force disconnect!"
                 )
             if G.degree(kode_b) == 0:
                 logger.warning(
-                    f"  PERINGATAN: {kode_b} menjadi isolated node "
-                    f"setelah force disconnect!"
+                    f"  PERINGATAN: {kode_b} menjadi isolated node setelah force disconnect!"
                 )
 
         logger.info(f"  Force disconnect diterapkan: {n_disconnected} edge dihapus")
@@ -165,10 +156,11 @@ def apply_manual_override(G: nx.Graph, filepath: str) -> nx.Graph:
 # PRIVATE HELPERS
 # =============================================================================
 
+
 def _read_sheet(
     path: Path,
     sheet_name: str,
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """
     Baca satu sheet dari file Excel.
 
@@ -198,9 +190,7 @@ def _read_sheet(
         if COL_NOTE not in df.columns:
             df[COL_NOTE] = ""
 
-        logger.info(
-            f"  Sheet '{sheet_name}': {len(df)} baris override ditemukan."
-        )
+        logger.info(f"  Sheet '{sheet_name}': {len(df)} baris override ditemukan.")
         return df
 
     except Exception as e:
@@ -212,6 +202,7 @@ def _read_sheet(
 # UTILITY: Template generator
 # =============================================================================
 
+
 def generate_override_template(output_path: str = "manual_override_template.xlsx") -> None:
     """
     Generate template file manual_override.xlsx yang kosong.
@@ -220,15 +211,14 @@ def generate_override_template(output_path: str = "manual_override_template.xlsx
     format yang benar.
     """
     import openpyxl
-    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.styles import Alignment, Font, PatternFill
 
     wb = openpyxl.Workbook()
 
     # Hapus default sheet
     wb.remove(wb.active)
 
-    header_font  = Font(bold=True, color="FFFFFF")
-    header_fill_connect    = PatternFill("solid", fgColor="1E7B34")
+    header_fill_connect = PatternFill("solid", fgColor="1E7B34")
     header_fill_disconnect = PatternFill("solid", fgColor="C0392B")
 
     for sheet_name, fill_color in [

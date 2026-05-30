@@ -9,10 +9,10 @@ Kelas utama:
 """
 
 import logging
-from typing import Optional, Dict, Tuple
-import numpy as np
+
 import geopandas as gpd
 import networkx as nx
+import numpy as np
 
 import config
 
@@ -21,12 +21,12 @@ logger = logging.getLogger(__name__)
 # Import osmnx dengan graceful error jika tidak terinstall
 try:
     import osmnx as ox
+
     OSMNX_AVAILABLE = True
 except ImportError:
     OSMNX_AVAILABLE = False
     logger.warning(
-        "OSMnx tidak terinstall. Sistem akan menggunakan "
-        "polygon touching saja sebagai adjacency."
+        "OSMnx tidak terinstall. Sistem akan menggunakan polygon touching saja sebagai adjacency."
     )
 
 
@@ -52,9 +52,9 @@ class RoadNetworkHandler:
             GeoDataFrame SLS dengan kolom kode_sls dan geometry.
         """
         self.gdf = gdf
-        self.road_graph: Optional[nx.MultiDiGraph] = None
-        self.snap_node_map: Dict[str, int] = {}
-        self.snap_distance_map: Dict[str, float] = {}
+        self.road_graph: nx.MultiDiGraph | None = None
+        self.snap_node_map: dict[str, int] = {}
+        self.snap_distance_map: dict[str, float] = {}
         self._osm_available = OSMNX_AVAILABLE
 
     # =========================================================================
@@ -77,13 +77,11 @@ class RoadNetworkHandler:
             bounds = self.gdf.total_bounds  # [minx, miny, maxx, maxy]
             north = bounds[3] + config.OSM_BUFFER_DEG
             south = bounds[1] - config.OSM_BUFFER_DEG
-            east  = bounds[2] + config.OSM_BUFFER_DEG
-            west  = bounds[0] - config.OSM_BUFFER_DEG
+            east = bounds[2] + config.OSM_BUFFER_DEG
+            west = bounds[0] - config.OSM_BUFFER_DEG
 
             logger.info(
-                f"  Download road network: "
-                f"N={north:.4f}, S={south:.4f}, "
-                f"E={east:.4f}, W={west:.4f}"
+                f"  Download road network: N={north:.4f}, S={south:.4f}, E={east:.4f}, W={west:.4f}"
             )
 
             # Download dari OSM
@@ -161,15 +159,14 @@ class RoadNetworkHandler:
 
         snapped_count = len(self.snap_node_map)
         logger.info(
-            f"  Snap selesai: {snapped_count} berhasil, "
-            f"{unsnapped_count} di luar threshold jalan."
+            f"  Snap selesai: {snapped_count} berhasil, {unsnapped_count} di luar threshold jalan."
         )
 
     def get_road_distance(
         self,
         kode_a: str,
         kode_b: str,
-    ) -> Optional[float]:
+    ) -> float | None:
         """
         Hitung jarak terpendek via jaringan jalan antara dua SLS (meter).
 
@@ -214,7 +211,7 @@ class RoadNetworkHandler:
         """Cek apakah road network berhasil dimuat."""
         return self.road_graph is not None
 
-    def get_snap_quality_report(self) -> Dict:
+    def get_snap_quality_report(self) -> dict:
         """
         Laporan kualitas snap — berguna untuk debugging.
 

@@ -14,11 +14,10 @@ Output: nx.Graph dengan:
 """
 
 import logging
-from typing import Optional, List, Tuple, Set
-import numpy as np
+
 import geopandas as gpd
 import networkx as nx
-from shapely.geometry import Point
+import numpy as np
 
 import config
 from road_network import RoadNetworkHandler
@@ -47,10 +46,7 @@ class AdjacencyBuilder:
         self.gdf_proj = gdf.to_crs(epsg=config.EPSG_METRIC)
 
         # Buat dict untuk akses cepat: kode_sls → row
-        self.sls_dict = {
-            row[config.COL_KODE_SLS]: row
-            for _, row in self.gdf.iterrows()
-        }
+        self.sls_dict = {row[config.COL_KODE_SLS]: row for _, row in self.gdf.iterrows()}
 
     # =========================================================================
     # PUBLIC METHODS
@@ -145,7 +141,7 @@ class AdjacencyBuilder:
     # PRIVATE METHODS
     # =========================================================================
 
-    def _get_candidate_pairs(self) -> List[Tuple[str, str, bool]]:
+    def _get_candidate_pairs(self) -> list[tuple[str, str, bool]]:
         """
         Generate kandidat pasangan SLS yang berpotensi bertetangga.
 
@@ -153,7 +149,7 @@ class AdjacencyBuilder:
         -------
         List of (kode_a, kode_b, is_touching)
         """
-        pairs: Set[Tuple[str, str, bool]] = set()
+        pairs: set[tuple[str, str, bool]] = set()
 
         # ----------------------------------------------------------------
         # A. Polygon touching (dengan buffer kecil untuk toleransi numerik)
@@ -183,7 +179,7 @@ class AdjacencyBuilder:
 
         return [(a, b, t) for a, b, t in pairs]
 
-    def _get_touching_pairs(self) -> List[Tuple[str, str]]:
+    def _get_touching_pairs(self) -> list[tuple[str, str]]:
         """
         Deteksi pasangan SLS yang polygonnya bersinggungan.
 
@@ -200,6 +196,7 @@ class AdjacencyBuilder:
 
         # Gunakan spatial index untuk cari kandidat
         from shapely.strtree import STRtree
+
         tree = STRtree(buffered_geoms)
 
         for idx_a, (kode_a, buf_a) in enumerate(zip(kodes, buffered_geoms)):
@@ -226,7 +223,7 @@ class AdjacencyBuilder:
 
         return touching_pairs
 
-    def _get_road_proximity_pairs(self) -> List[Tuple[str, str]]:
+    def _get_road_proximity_pairs(self) -> list[tuple[str, str]]:
         """
         Generate pasangan SLS yang centroidnya dalam ROAD_DISTANCE_THRESHOLD
         (menggunakan Euclidean distance sebagai pre-filter sebelum road distance).
@@ -240,10 +237,12 @@ class AdjacencyBuilder:
         centroids = {}
         for _, row in self.gdf_proj.iterrows():
             kode = row[config.COL_KODE_SLS]
-            centroids[kode] = np.array([
-                row.geometry.centroid.x,
-                row.geometry.centroid.y,
-            ])
+            centroids[kode] = np.array(
+                [
+                    row.geometry.centroid.x,
+                    row.geometry.centroid.y,
+                ]
+            )
 
         kodes = list(centroids.keys())
         threshold = config.ROAD_DISTANCE_THRESHOLD_M
@@ -255,9 +254,7 @@ class AdjacencyBuilder:
         for i in range(len(kodes)):
             for j in range(i + 1, len(kodes)):
                 kode_a, kode_b = kodes[i], kodes[j]
-                dist_euclid = np.linalg.norm(
-                    centroids[kode_a] - centroids[kode_b]
-                )
+                dist_euclid = np.linalg.norm(centroids[kode_a] - centroids[kode_b])
                 if dist_euclid <= euclidean_threshold:
                     proximity_pairs.append((kode_a, kode_b))
 
@@ -310,6 +307,6 @@ class AdjacencyBuilder:
             # Log ukuran tiap komponen
             for i, comp in enumerate(sorted(components, key=len, reverse=True)):
                 logger.warning(
-                    f"    Komponen {i+1}: {len(comp)} SLS — "
+                    f"    Komponen {i + 1}: {len(comp)} SLS — "
                     f"{list(comp)[:3]}{'...' if len(comp) > 3 else ''}"
                 )

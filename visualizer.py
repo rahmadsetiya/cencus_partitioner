@@ -14,23 +14,38 @@ Fitur peta:
 """
 
 import logging
-from typing import Dict, Optional
-import numpy as np
+
 import geopandas as gpd
-import networkx as nx
+import numpy as np
 
 import config
 
 logger = logging.getLogger(__name__)
 
-Partition = Dict[str, int]
+Partition = dict[str, int]
 
 # Palet warna untuk tiap petugas (hex tanpa #)
 GROUP_COLORS_HEX = [
-    "#4472C4", "#ED7D31", "#A9D18E", "#FF6B6B", "#FFD700",
-    "#70AD47", "#26547C", "#9E480E", "#636363", "#997300",
-    "#255E91", "#843C0C", "#622E44", "#2D6A4F", "#6A0572",
-    "#0563C1", "#954F72", "#C55A11", "#538135", "#833C00",
+    "#4472C4",
+    "#ED7D31",
+    "#A9D18E",
+    "#FF6B6B",
+    "#FFD700",
+    "#70AD47",
+    "#26547C",
+    "#9E480E",
+    "#636363",
+    "#997300",
+    "#255E91",
+    "#843C0C",
+    "#622E44",
+    "#2D6A4F",
+    "#6A0572",
+    "#0563C1",
+    "#954F72",
+    "#C55A11",
+    "#538135",
+    "#833C00",
 ]
 
 
@@ -55,18 +70,21 @@ class MapVisualizer:
         n_groups : int
             Jumlah kelompok petugas.
         """
-        self.gdf       = gdf.copy()
+        self.gdf = gdf.copy()
         self.partition = partition
-        self.n_groups  = n_groups
+        self.n_groups = n_groups
 
         # Tambahkan kolom group assignment ke GDF
-        self.gdf["group_id"]  = self.gdf[config.COL_KODE_SLS].map(partition)
-        self.gdf["petugas"]   = self.gdf["group_id"].apply(
+        self.gdf["group_id"] = self.gdf[config.COL_KODE_SLS].map(partition)
+        self.gdf["petugas"] = self.gdf["group_id"].apply(
             lambda g: f"Petugas {int(g) + 1}" if g is not None and not np.isnan(g) else "Unassigned"
         )
-        self.gdf["color"]     = self.gdf["group_id"].apply(
-            lambda g: GROUP_COLORS_HEX[int(g) % len(GROUP_COLORS_HEX)]
-            if g is not None and not np.isnan(g) else "#808080"
+        self.gdf["color"] = self.gdf["group_id"].apply(
+            lambda g: (
+                GROUP_COLORS_HEX[int(g) % len(GROUP_COLORS_HEX)]
+                if g is not None and not np.isnan(g)
+                else "#808080"
+            )
         )
 
     # =========================================================================
@@ -84,12 +102,9 @@ class MapVisualizer:
         """
         try:
             import folium
-            from folium.plugins import MiniMap, Fullscreen, MeasureControl
+            from folium.plugins import Fullscreen, MeasureControl, MiniMap
         except ImportError:
-            raise ImportError(
-                "Folium tidak terinstall. "
-                "Jalankan: pip install folium"
-            )
+            raise ImportError("Folium tidak terinstall. Jalankan: pip install folium")
 
         # Pusat peta
         center_lat = self.gdf.geometry.centroid.y.mean()
@@ -141,15 +156,13 @@ class MapVisualizer:
             feature_group = folium.FeatureGroup(name=layer_name, show=True)
 
             for _, row in group_gdf.iterrows():
-                kode    = row[config.COL_KODE_SLS]
-                muatan  = row[config.COL_MUATAN]
+                kode = row[config.COL_KODE_SLS]
+                muatan = row[config.COL_MUATAN]
                 petugas = row["petugas"]
 
                 # Tooltip singkat (muncul saat hover)
                 tooltip = folium.Tooltip(
-                    f"<b>{kode}</b><br>"
-                    f"Muatan: {muatan:,.0f}<br>"
-                    f"{petugas}",
+                    f"<b>{kode}</b><br>Muatan: {muatan:,.0f}<br>{petugas}",
                     sticky=True,
                 )
 
@@ -200,7 +213,7 @@ class MapVisualizer:
                 continue
 
             group_id = row.get("group_id", 0)
-            color    = row.get("color", "#808080")
+            color = row.get("color", "#808080")
 
             folium.CircleMarker(
                 location=[lat, lon],
@@ -247,17 +260,15 @@ class MapVisualizer:
         for group_id in range(self.n_groups):
             color = GROUP_COLORS_HEX[group_id % len(GROUP_COLORS_HEX)]
             n_sls = (self.gdf["group_id"] == group_id).sum()
-            total_load = self.gdf.loc[
-                self.gdf["group_id"] == group_id, config.COL_MUATAN
-            ].sum()
+            total_load = self.gdf.loc[self.gdf["group_id"] == group_id, config.COL_MUATAN].sum()
             items_html += (
                 f'<div style="display:flex; align-items:center; margin-bottom:4px;">'
                 f'  <div style="width:16px; height:16px; background:{color}; '
                 f'     border-radius:3px; margin-right:8px; flex-shrink:0;"></div>'
                 f'  <span style="font-size:12px;">'
-                f'     Petugas {group_id+1} — {n_sls} SLS, muatan {total_load:,.0f}'
-                f'  </span>'
-                f'</div>'
+                f"     Petugas {group_id + 1} — {n_sls} SLS, muatan {total_load:,.0f}"
+                f"  </span>"
+                f"</div>"
             )
 
         return f"""
@@ -286,6 +297,7 @@ class MapVisualizer:
 # MATPLOTLIB fallback visualizer
 # =============================================================================
 
+
 def save_static_map(
     gdf: gpd.GeoDataFrame,
     partition: Partition,
@@ -301,9 +313,8 @@ def save_static_map(
         Path output file gambar (.png, .pdf, .svg).
     """
     try:
-        import matplotlib.pyplot as plt
         import matplotlib.patches as mpatches
-        from matplotlib.colors import to_rgba
+        import matplotlib.pyplot as plt
 
         gdf = gdf.copy()
         gdf["group_id"] = gdf[config.COL_KODE_SLS].map(partition)
@@ -343,8 +354,7 @@ def save_static_map(
             n_sls = len(group_gdf)
             total_load = group_gdf[config.COL_MUATAN].sum()
             patch = mpatches.Patch(
-                color=color,
-                label=f"Petugas {group_id+1} ({n_sls} SLS, muatan {total_load:,.0f})"
+                color=color, label=f"Petugas {group_id + 1} ({n_sls} SLS, muatan {total_load:,.0f})"
             )
             legend_patches.append(patch)
 

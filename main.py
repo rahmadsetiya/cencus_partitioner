@@ -23,20 +23,18 @@ Contoh penggunaan:
     partition = run_pipeline("sls.geojson", n_officers=8)
 """
 
-import sys
-import logging
 import argparse
+import logging
+import sys
 from pathlib import Path
 
-import geopandas as gpd
-
 import config
-from data_loader import load_geojson
-from road_network import RoadNetworkHandler
 from adjacency_builder import AdjacencyBuilder
+from data_loader import load_geojson
 from manual_override import apply_manual_override
-from partitioner import BalancedPartitioner
 from output_generator import OutputGenerator
+from partitioner import BalancedPartitioner
+from road_network import RoadNetworkHandler
 from visualizer import MapVisualizer, save_static_map
 
 # =============================================================================
@@ -55,6 +53,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # MAIN PIPELINE
 # =============================================================================
+
 
 def run_pipeline(
     geojson_path: str,
@@ -97,7 +96,7 @@ def run_pipeline(
         config.EPSG_METRIC = epsg_metric
 
     output_excel = output_excel or config.OUTPUT_EXCEL
-    output_map   = output_map   or config.OUTPUT_MAP_HTML
+    output_map = output_map or config.OUTPUT_MAP_HTML
 
     logger.info("=" * 60)
     logger.info("  SISTEM PARTISI WILAYAH PETUGAS SENSUS")
@@ -123,12 +122,12 @@ def run_pipeline(
     # TAHAP 2: Hitung centroid
     # =========================================================================
     logger.info("[2/9] Menghitung centroid SLS...")
-    gdf_proj   = gdf.to_crs(epsg=config.EPSG_METRIC)
-    centroids  = gdf_proj.geometry.centroid.to_crs(epsg=config.EPSG_GEO)
+    gdf_proj = gdf.to_crs(epsg=config.EPSG_METRIC)
+    centroids = gdf_proj.geometry.centroid.to_crs(epsg=config.EPSG_GEO)
     gdf["centroid_geom"] = centroids
-    gdf["centroid_lon"]  = centroids.x
-    gdf["centroid_lat"]  = centroids.y
-    logger.info(f"      Centroid berhasil dihitung.")
+    gdf["centroid_lon"] = centroids.x
+    gdf["centroid_lat"] = centroids.y
+    logger.info("      Centroid berhasil dihitung.")
 
     # =========================================================================
     # TAHAP 3: Download road network
@@ -139,7 +138,7 @@ def run_pipeline(
 
     # Laporan kualitas snap (info saja)
     if road_handler.is_road_available():
-        logger.info(f"      Road network tersedia.")
+        logger.info("      Road network tersedia.")
     else:
         logger.warning("      Road network tidak tersedia. Fallback ke polygon touching.")
 
@@ -162,7 +161,7 @@ def run_pipeline(
     # =========================================================================
     logger.info("[5/9] Membangun weighted accessibility graph...")
     adj_builder = AdjacencyBuilder(gdf, road_handler)
-    G           = adj_builder.build_graph()
+    G = adj_builder.build_graph()
     logger.info(f"      Graph: {G.number_of_nodes()} node, {G.number_of_edges()} edge")
 
     # =========================================================================
@@ -182,7 +181,7 @@ def run_pipeline(
     # =========================================================================
     logger.info(f"[7/9] Mempartisi {len(gdf)} SLS ke {n_officers} petugas...")
     partitioner = BalancedPartitioner(G, n_groups=n_officers)
-    partition   = partitioner.run()
+    partition = partitioner.run()
 
     # =========================================================================
     # TAHAP 8: Generate output Excel
@@ -221,6 +220,7 @@ def run_pipeline(
 # =============================================================================
 # CLI ENTRY POINT
 # =============================================================================
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -303,6 +303,7 @@ Contoh:
     # -------------------------------------------------------------------------
     if args.generate_template:
         from manual_override import generate_override_template
+
         generate_override_template("manual_override_template.xlsx")
         print("Template berhasil dibuat: manual_override_template.xlsx")
         return

@@ -27,19 +27,20 @@ CARA PAKAI:
 Edit bagian KONFIGURASI di bawah sesuai file lo.
 """
 
-import sys
 import logging
+import sys
 from pathlib import Path
-import pandas as pd
-import numpy as np
+
 import geopandas as gpd
 import networkx as nx
+import pandas as pd
+
+import config
+from output_generator import OutputGenerator
 
 # Import modul dari sistem
 from partitioner import BalancedPartitioner
-from output_generator import OutputGenerator
-from visualizer import MapVisualizer, save_static_map
-import config
+from visualizer import MapVisualizer
 
 # Setup logging
 logging.basicConfig(
@@ -56,40 +57,41 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 # File Excel yang berisi adjacency matrix dan muatan
-EXCEL_PATH = "data/matriks_cendana.xlsx"   # ← ganti nama file Excel lo
+EXCEL_PATH = "data/matriks_cendana.xlsx"  # ← ganti nama file Excel lo
 
 # Nama sheet di Excel
-SHEET_MATRIX = "Sheet1"   # ← sheet adjacency matrix
-SHEET_MUATAN = "Sheet2"   # ← sheet muatan/kode
+SHEET_MATRIX = "Sheet1"  # ← sheet adjacency matrix
+SHEET_MUATAN = "Sheet2"  # ← sheet muatan/kode
 
 # Nama kolom di sheet muatan (Sheet2)
 # Sesuaikan jika nama kolom di Excel lo berbeda
-COL_KODE     = "KODE"       # kolom label huruf (A, B, C...)
-COL_IDSUBSLS = "IDSUBSLS"   # kolom kode SLS
-COL_NAMA_SLS = "NAMA SLS"   # kolom nama dusun (opsional)
-COL_MUATAN   = "MUATAN"     # kolom muatan/beban kerja
+COL_KODE = "KODE"  # kolom label huruf (A, B, C...)
+COL_IDSUBSLS = "IDSUBSLS"  # kolom kode SLS
+COL_NAMA_SLS = "NAMA SLS"  # kolom nama dusun (opsional)
+COL_MUATAN = "MUATAN"  # kolom muatan/beban kerja
 
 # File GeoJSON — hanya untuk geometry (visualisasi)
 # Bisa juga None jika tidak mau visualisasi peta
 GEOJSON_PATH = "data/final_sls_202517316.geojson"
 
 # Kolom kunci di GeoJSON yang cocok dengan IDSUBSLS di Excel
-COL_GEO_KEY  = "idsubsls"
+COL_GEO_KEY = "idsubsls"
 
 # Jumlah petugas sensus
 N_OFFICERS = 11
 
 # Output
 OUTPUT_EXCEL = "output/hasil_partisi_cendana.xlsx"
-OUTPUT_MAP   = "output/peta_partisi_cendana.html"
+OUTPUT_MAP = "output/peta_partisi_cendana.html"
 
 # EPSG metric untuk wilayah (32750 = Sulawesi)
-EPSG_METRIC  = 32750
+EPSG_METRIC = 32750
 
 
 # =============================================================================
 # FUNGSI UTAMA
 # =============================================================================
+
 
 def load_muatan_mapping(excel_path: str) -> pd.DataFrame:
     """
@@ -104,7 +106,7 @@ def load_muatan_mapping(excel_path: str) -> pd.DataFrame:
 
     # Cek kolom wajib
     required = [COL_KODE.upper(), COL_IDSUBSLS.upper(), COL_MUATAN.upper()]
-    missing  = [c for c in required if c not in df.columns]
+    missing = [c for c in required if c not in df.columns]
     if missing:
         logger.error(
             f"  Kolom tidak ditemukan di sheet muatan: {missing}\n"
@@ -114,9 +116,9 @@ def load_muatan_mapping(excel_path: str) -> pd.DataFrame:
 
     # Bersihkan data
     df = df.dropna(subset=[COL_KODE.upper(), COL_IDSUBSLS.upper()])
-    df[COL_KODE.upper()]     = df[COL_KODE.upper()].astype(str).str.strip()
+    df[COL_KODE.upper()] = df[COL_KODE.upper()].astype(str).str.strip()
     df[COL_IDSUBSLS.upper()] = df[COL_IDSUBSLS.upper()].astype(str).str.strip()
-    df[COL_MUATAN.upper()]   = pd.to_numeric(df[COL_MUATAN.upper()], errors="coerce").fillna(0)
+    df[COL_MUATAN.upper()] = pd.to_numeric(df[COL_MUATAN.upper()], errors="coerce").fillna(0)
 
     logger.info(f"  {len(df)} SLS dimuat dari sheet muatan")
     return df
@@ -131,17 +133,17 @@ def load_adjacency_matrix(excel_path: str, valid_kodes: list) -> pd.DataFrame:
     df_raw = pd.read_excel(
         excel_path,
         sheet_name=SHEET_MATRIX,
-        index_col=0,       # kolom pertama = label baris
-        header=0,          # baris pertama = header
+        index_col=0,  # kolom pertama = label baris
+        header=0,  # baris pertama = header
     )
 
     # Bersihkan label
-    df_raw.index   = [str(i).strip() for i in df_raw.index]
+    df_raw.index = [str(i).strip() for i in df_raw.index]
     df_raw.columns = [str(c).strip() for c in df_raw.columns]
 
     # Filter hanya kode yang ada di sheet muatan (buang baris/kolom kosong)
     valid_set = set(valid_kodes)
-    rows_valid = [r for r in df_raw.index   if r in valid_set]
+    rows_valid = [r for r in df_raw.index if r in valid_set]
     cols_valid = [c for c in df_raw.columns if c in valid_set]
 
     df_matrix = df_raw.loc[rows_valid, cols_valid].copy()
@@ -157,11 +159,11 @@ def load_adjacency_matrix(excel_path: str, valid_kodes: list) -> pd.DataFrame:
             return 0
 
     # applymap diganti map di pandas >= 2.1.0
-    df_matrix = df_matrix.map(parse_value) if hasattr(df_matrix, "map") else df_matrix.applymap(parse_value)
-
-    logger.info(
-        f"  Matrix {len(rows_valid)}×{len(cols_valid)} berhasil dibaca"
+    df_matrix = (
+        df_matrix.map(parse_value) if hasattr(df_matrix, "map") else df_matrix.applymap(parse_value)
     )
+
+    logger.info(f"  Matrix {len(rows_valid)}×{len(cols_valid)} berhasil dibaca")
     return df_matrix
 
 
@@ -184,9 +186,9 @@ def build_graph_from_excel(
     for _, row in df_muatan.iterrows():
         kode = str(row[COL_KODE.upper()]).strip()
         muatan_lookup[kode] = {
-            "muatan":    float(row[COL_MUATAN.upper()]),
-            "idsubsls":  str(row[COL_IDSUBSLS.upper()]).strip(),
-            "nama_sls":  str(row.get(COL_NAMA_SLS.upper(), "")).strip(),
+            "muatan": float(row[COL_MUATAN.upper()]),
+            "idsubsls": str(row[COL_IDSUBSLS.upper()]).strip(),
+            "nama_sls": str(row.get(COL_NAMA_SLS.upper(), "")).strip(),
         }
 
     # Tambahkan node
@@ -194,16 +196,16 @@ def build_graph_from_excel(
         info = muatan_lookup.get(kode, {"muatan": 0, "idsubsls": "", "nama_sls": ""})
         G.add_node(
             kode,
-            muatan   = info["muatan"],
-            idsubsls = info["idsubsls"],
-            nama_sls = info["nama_sls"],
+            muatan=info["muatan"],
+            idsubsls=info["idsubsls"],
+            nama_sls=info["nama_sls"],
         )
 
     # Tambahkan edge dari adjacency matrix
     edges_added = 0
     for kode_a in df_matrix.index:
         for kode_b in df_matrix.columns:
-            if kode_a >= kode_b:   # hindari duplikat (matrix simetris)
+            if kode_a >= kode_b:  # hindari duplikat (matrix simetris)
                 continue
             val = df_matrix.loc[kode_a, kode_b]
             if val == 1:
@@ -219,7 +221,7 @@ def build_graph_from_excel(
         n_comp = nx.number_connected_components(G)
         logger.warning(f"  Graf memiliki {n_comp} komponen terpisah!")
         for i, comp in enumerate(sorted(nx.connected_components(G), key=len, reverse=True)):
-            logger.warning(f"    Komponen {i+1}: {sorted(comp)}")
+            logger.warning(f"    Komponen {i + 1}: {sorted(comp)}")
 
     return G
 
@@ -253,9 +255,11 @@ def load_geometry(
     # Tambahkan kolom untuk sistem output
     gdf["kode_sls"] = gdf[COL_GEO_KEY].map(id_to_kode)
     gdf["group_id"] = gdf["kode_sls"].map(kode_to_group)
-    gdf["muatan"]   = gdf["kode_sls"].map(
-        {k: G_ref.nodes[k]["muatan"] for k in G_ref.nodes}
-    ) if "G_ref" in globals() else 0
+    gdf["muatan"] = (
+        gdf["kode_sls"].map({k: G_ref.nodes[k]["muatan"] for k in G_ref.nodes})
+        if "G_ref" in globals()
+        else 0
+    )
 
     # Centroid untuk visualisasi
     gdf_proj = gdf.to_crs(epsg=EPSG_METRIC)
@@ -270,6 +274,7 @@ def load_geometry(
 # =============================================================================
 # PIPELINE UTAMA
 # =============================================================================
+
 
 def run():
     logger.info("=" * 60)
@@ -319,7 +324,7 @@ def run():
     # ------------------------------------------------------------------
     logger.info(f"\n[4/6] Mempartisi {G.number_of_nodes()} SLS ke {N_OFFICERS} petugas...")
     partitioner = BalancedPartitioner(G, n_groups=N_OFFICERS)
-    partition   = partitioner.run()
+    partition = partitioner.run()
 
     # ------------------------------------------------------------------
     # 5. Output Excel
@@ -364,15 +369,17 @@ def _build_output_gdf(df_muatan: pd.DataFrame, partition: dict) -> gpd.GeoDataFr
     rows = []
     for _, row in df_muatan.iterrows():
         kode = str(row[COL_KODE.upper()]).strip()
-        rows.append({
-            "kode_sls":   kode,
-            "muatan":     float(row[COL_MUATAN.upper()]),
-            "idsubsls":   str(row[COL_IDSUBSLS.upper()]).strip(),
-            "nama_sls":   str(row.get(COL_NAMA_SLS.upper(), "")).strip(),
-            "centroid_lon": 0.0,
-            "centroid_lat": 0.0,
-            "geometry":   Point(0, 0),
-        })
+        rows.append(
+            {
+                "kode_sls": kode,
+                "muatan": float(row[COL_MUATAN.upper()]),
+                "idsubsls": str(row[COL_IDSUBSLS.upper()]).strip(),
+                "nama_sls": str(row.get(COL_NAMA_SLS.upper(), "")).strip(),
+                "centroid_lon": 0.0,
+                "centroid_lat": 0.0,
+                "geometry": Point(0, 0),
+            }
+        )
 
     gdf = gpd.GeoDataFrame(rows, geometry="geometry", crs=config.EPSG_GEO)
     return gdf
@@ -400,7 +407,7 @@ def _build_geo_gdf(df_muatan: pd.DataFrame, partition: dict) -> gpd.GeoDataFrame
     relevant_ids = set(id_to_kode.keys())
     gdf = gdf_all[gdf_all[COL_GEO_KEY].isin(relevant_ids)].copy()
     gdf["kode_sls"] = gdf[COL_GEO_KEY].map(id_to_kode)
-    gdf["muatan"]   = gdf["kode_sls"].map(kode_to_muatan).fillna(0)
+    gdf["muatan"] = gdf["kode_sls"].map(kode_to_muatan).fillna(0)
 
     # Centroid
     gdf_proj = gdf.to_crs(epsg=EPSG_METRIC)

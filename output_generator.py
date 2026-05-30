@@ -10,29 +10,43 @@ Sheet yang dihasilkan:
 """
 
 import logging
-from typing import Dict, List
-import pandas as pd
-import numpy as np
-import networkx as nx
+
 import geopandas as gpd
+import networkx as nx
+import numpy as np
 import openpyxl
-from openpyxl.styles import (
-    Font, PatternFill, Alignment, Border, Side
-)
+import pandas as pd
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 import config
 
 logger = logging.getLogger(__name__)
 
-Partition = Dict[str, int]   # kode_sls → group_id
+Partition = dict[str, int]  # kode_sls → group_id
 
 # Palet warna untuk tiap petugas (Excel hex, max 20 petugas)
 GROUP_COLORS = [
-    "4472C4", "ED7D31", "A9D18E", "FF0000", "FFFF00",
-    "70AD47", "264478", "9E480E", "636363", "997300",
-    "255E91", "843C0C", "622E44", "806000", "375623",
-    "0563C1", "954F72", "C55A11", "538135", "833C00",
+    "4472C4",
+    "ED7D31",
+    "A9D18E",
+    "FF0000",
+    "FFFF00",
+    "70AD47",
+    "264478",
+    "9E480E",
+    "636363",
+    "997300",
+    "255E91",
+    "843C0C",
+    "622E44",
+    "806000",
+    "375623",
+    "0563C1",
+    "954F72",
+    "C55A11",
+    "538135",
+    "833C00",
 ]
 
 
@@ -46,10 +60,10 @@ class OutputGenerator:
         partition: Partition,
         n_groups: int,
     ):
-        self.gdf       = gdf
-        self.G         = G
+        self.gdf = gdf
+        self.G = G
         self.partition = partition
-        self.n_groups  = n_groups
+        self.n_groups = n_groups
 
         # Pre-compute statistik
         self.group_stats = self._compute_group_stats()
@@ -69,8 +83,8 @@ class OutputGenerator:
         """
         # Buat DataFrames untuk tiap sheet
         df_summary = self._build_summary_df()
-        df_detail  = self._build_detail_df()
-        df_edges   = self._build_edges_df()
+        df_detail = self._build_detail_df()
+        df_edges = self._build_edges_df()
 
         # Tulis ke Excel dengan openpyxl engine
         with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
@@ -97,14 +111,16 @@ class OutputGenerator:
         print(f"  Jumlah petugas: {self.n_groups}")
         print(f"  Target/petugas: {self.gdf[config.COL_MUATAN].sum() / self.n_groups:,.1f}")
         print("-" * 65)
-        print(f"  {'Petugas':<10} {'Jml SLS':>8} {'Muatan':>10} {'Connected':>12} {'Travel Cost':>12}")
+        print(
+            f"  {'Petugas':<10} {'Jml SLS':>8} {'Muatan':>10} {'Connected':>12} {'Travel Cost':>12}"
+        )
         print("-" * 65)
 
         for group_id in range(self.n_groups):
             stats = self.group_stats[group_id]
             status = "YA" if stats["is_connected"] else "TIDAK ⚠"
             print(
-                f"  Petugas {group_id+1:<3} "
+                f"  Petugas {group_id + 1:<3} "
                 f"{stats['n_sls']:>8,} "
                 f"{stats['total_muatan']:>10,.0f} "
                 f"{'':>4}{status:>9} "
@@ -116,7 +132,7 @@ class OutputGenerator:
         print(f"  Muatan maks   : {max(loads):,.0f}")
         print(f"  Muatan min    : {min(loads):,.0f}")
         print(f"  Selisih maks  : {max(loads) - min(loads):,.0f}")
-        print(f"  CV (std/mean) : {np.std(loads)/np.mean(loads):.4f}")
+        print(f"  CV (std/mean) : {np.std(loads) / np.mean(loads):.4f}")
         print("=" * 65 + "\n")
 
     # =========================================================================
@@ -128,16 +144,18 @@ class OutputGenerator:
         rows = []
         for group_id in range(self.n_groups):
             stats = self.group_stats[group_id]
-            rows.append({
-                "Petugas": f"Petugas {group_id + 1}",
-                "Jumlah SLS": stats["n_sls"],
-                "Total Muatan": stats["total_muatan"],
-                "Muatan Min SLS": stats["min_sls_load"],
-                "Muatan Maks SLS": stats["max_sls_load"],
-                "Connected": "Ya" if stats["is_connected"] else "TIDAK",
-                "Total Travel Cost": round(stats["total_travel_cost"], 2),
-                "Daftar SLS": ", ".join(stats["sls_list"]),
-            })
+            rows.append(
+                {
+                    "Petugas": f"Petugas {group_id + 1}",
+                    "Jumlah SLS": stats["n_sls"],
+                    "Total Muatan": stats["total_muatan"],
+                    "Muatan Min SLS": stats["min_sls_load"],
+                    "Muatan Maks SLS": stats["max_sls_load"],
+                    "Connected": "Ya" if stats["is_connected"] else "TIDAK",
+                    "Total Travel Cost": round(stats["total_travel_cost"], 2),
+                    "Daftar SLS": ", ".join(stats["sls_list"]),
+                }
+            )
         return pd.DataFrame(rows)
 
     def _build_detail_df(self) -> pd.DataFrame:
@@ -146,14 +164,16 @@ class OutputGenerator:
         for _, row in self.gdf.iterrows():
             kode = row[config.COL_KODE_SLS]
             group_id = self.partition.get(kode, -1)
-            rows.append({
-                "kode_sls": kode,
-                "muatan": row[config.COL_MUATAN],
-                "petugas": f"Petugas {group_id + 1}" if group_id >= 0 else "UNASSIGNED",
-                "group_id": group_id + 1 if group_id >= 0 else -1,
-                "centroid_lon": round(row.get("centroid_lon", 0), 6),
-                "centroid_lat": round(row.get("centroid_lat", 0), 6),
-            })
+            rows.append(
+                {
+                    "kode_sls": kode,
+                    "muatan": row[config.COL_MUATAN],
+                    "petugas": f"Petugas {group_id + 1}" if group_id >= 0 else "UNASSIGNED",
+                    "group_id": group_id + 1 if group_id >= 0 else -1,
+                    "centroid_lon": round(row.get("centroid_lon", 0), 6),
+                    "centroid_lat": round(row.get("centroid_lat", 0), 6),
+                }
+            )
 
         df = pd.DataFrame(rows)
         # Urutkan berdasarkan petugas lalu kode_sls
@@ -166,24 +186,26 @@ class OutputGenerator:
         for u, v, data in self.G.edges(data=True):
             group_u = self.partition.get(u, -1)
             group_v = self.partition.get(v, -1)
-            rows.append({
-                "kode_sls_a": u,
-                "kode_sls_b": v,
-                "weight": round(data.get("weight", -1), 4),
-                "road_dist_m": data.get("road_dist_m", -1),
-                "is_touching": data.get("is_touching", False),
-                "manual_override": data.get("manual_override", ""),
-                "same_group": "Ya" if group_u == group_v else "Tidak",
-                "petugas_a": f"Petugas {group_u + 1}" if group_u >= 0 else "?",
-                "petugas_b": f"Petugas {group_v + 1}" if group_v >= 0 else "?",
-            })
+            rows.append(
+                {
+                    "kode_sls_a": u,
+                    "kode_sls_b": v,
+                    "weight": round(data.get("weight", -1), 4),
+                    "road_dist_m": data.get("road_dist_m", -1),
+                    "is_touching": data.get("is_touching", False),
+                    "manual_override": data.get("manual_override", ""),
+                    "same_group": "Ya" if group_u == group_v else "Tidak",
+                    "petugas_a": f"Petugas {group_u + 1}" if group_u >= 0 else "?",
+                    "petugas_b": f"Petugas {group_v + 1}" if group_v >= 0 else "?",
+                }
+            )
         return pd.DataFrame(rows)
 
     # =========================================================================
     # PRIVATE: Compute stats
     # =========================================================================
 
-    def _compute_group_stats(self) -> Dict:
+    def _compute_group_stats(self) -> dict:
         """Hitung statistik untuk setiap grup."""
         stats = {}
 
@@ -207,15 +229,11 @@ class OutputGenerator:
                 continue
 
             muatan = float(row[config.COL_MUATAN])
-            stats[group_id]["n_sls"]          += 1
-            stats[group_id]["total_muatan"]   += muatan
+            stats[group_id]["n_sls"] += 1
+            stats[group_id]["total_muatan"] += muatan
             stats[group_id]["sls_list"].append(kode)
-            stats[group_id]["min_sls_load"] = min(
-                stats[group_id]["min_sls_load"], muatan
-            )
-            stats[group_id]["max_sls_load"] = max(
-                stats[group_id]["max_sls_load"], muatan
-            )
+            stats[group_id]["min_sls_load"] = min(stats[group_id]["min_sls_load"], muatan)
+            stats[group_id]["max_sls_load"] = max(stats[group_id]["max_sls_load"], muatan)
 
         # Cek konektivitas dan hitung travel cost per grup
         for g in range(self.n_groups):
@@ -229,14 +247,11 @@ class OutputGenerator:
 
             # Subgraf untuk cek konektivitas
             subgraph = self.G.subgraph(sls_nodes)
-            stats[g]["is_connected"] = (
-                len(sls_nodes) <= 1 or nx.is_connected(subgraph)
-            )
+            stats[g]["is_connected"] = len(sls_nodes) <= 1 or nx.is_connected(subgraph)
 
             # Total travel cost = jumlah weight semua edge internal grup
             stats[g]["total_travel_cost"] = sum(
-                data.get("weight", 0)
-                for _, _, data in subgraph.edges(data=True)
+                data.get("weight", 0) for _, _, data in subgraph.edges(data=True)
             )
 
         return stats
@@ -351,6 +366,7 @@ class OutputGenerator:
 # =============================================================================
 # HELPER
 # =============================================================================
+
 
 def _autofit_columns(ws, min_width: int = 10, max_width: int = 50) -> None:
     """Auto-fit lebar kolom berdasarkan konten."""
