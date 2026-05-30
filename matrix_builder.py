@@ -127,6 +127,70 @@ class AutoMatrixBuilder:
             logger.error(f"=[AutoMatrixBuilder] Error: {error_msg}")
             return None, error_msg
 
+    def build_from_geojson(
+        self,
+        muatan_col: str = "muatan",
+        idsubsls_col: str = "idsubsls",
+    ) -> tuple[nx.Graph, str | None]:
+        """
+        Build weighted graph dari GeoDataFrame yang sudah punya kolom muatan.
+        Tidak perlu Excel — muatan dibaca langsung dari GeoJSON.
+        """
+        try:
+            logger.info("=[AutoMatrixBuilder] build_from_geojson mulai")
+
+            if muatan_col not in self.gdf.columns:
+                return None, f"Kolom muatan '{muatan_col}' tidak ditemukan di GeoJSON."
+            if idsubsls_col not in self.gdf.columns:
+                return None, f"Kolom '{idsubsls_col}' tidak ditemukan di GeoJSON."
+
+            # Gunakan idsubsls sebagai node identifier (kompatibel dengan AdjacencyBuilder)
+            self.gdf[config.COL_KODE_SLS] = self.gdf[idsubsls_col].astype(str)
+
+            # AdjacencyBuilder baca config.COL_MUATAN ("muatan") dari GDF.
+            # Jika nama kolom berbeda, buat alias agar kompatibel.
+            if muatan_col != config.COL_MUATAN:
+                self.gdf[config.COL_MUATAN] = self.gdf[muatan_col]
+
+            # Muatan map: idsubsls → muatan value
+            muatan_map = {
+                str(row[idsubsls_col]): float(row[muatan_col]) for _, row in self.gdf.iterrows()
+            }
+
+            # OSM road network
+            logger.info("=[AutoMatrixBuilder] Download jaringan jalan OSM...")
+            self.road_handler = RoadNetworkHandler(self.gdf)
+            self.road_handler.download_network()
+
+            if self.road_handler.is_road_available():
+                logger.info("=[AutoMatrixBuilder] OSM tersedia, snap centroids...")
+                self.road_handler.snap_centroids(self.gdf)
+            else:
+                logger.info("=[AutoMatrixBuilder] OSM tidak tersedia, fallback ke polygon touching")
+
+            # Build adjacency graph
+            logger.info("=[AutoMatrixBuilder] Build adjacency graph...")
+            self.adj_builder = AdjacencyBuilder(self.gdf, self.road_handler)
+            G = self.adj_builder.build_graph()
+
+            # Attach muatan + idsubsls ke setiap node
+            for node in G.nodes():
+                G.nodes[node][config.COL_MUATAN] = muatan_map.get(node, 0)
+                G.nodes[node]["idsubsls"] = node
+                if node not in muatan_map:
+                    logger.warning(f"  Node {node} tidak ada di muatan, set muatan=0")
+
+            logger.info(
+                f"=[AutoMatrixBuilder] Selesai: "
+                f"{G.number_of_nodes()} node, {G.number_of_edges()} edge"
+            )
+            return G, None
+
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {str(e)}"
+            logger.error(f"=[AutoMatrixBuilder] Error: {error_msg}")
+            return None, error_msg
+
     def get_snap_quality_report(self) -> dict | None:
         """Get road snap quality info (untuk debugging)."""
         if self.road_handler:

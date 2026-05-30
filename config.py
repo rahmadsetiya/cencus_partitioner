@@ -67,9 +67,16 @@ N_RESTARTS = 15
 # Jumlah maksimum iterasi local search per restart.
 MAX_LOCAL_SEARCH_ITER = 2_000
 
-# Tolerance imbalance yang diterima (rasio terhadap mean).
-# 0.10 = berhenti jika CV (std/mean) ≤ 10%.
+# Tolerance imbalance yang diterima (rasio terhadap mean). Dipakai oleh _imbalance_cv (referensi).
 IMBALANCE_TOLERANCE = 0.05
+
+# Tolerance untuk objektif max-min (satuan muatan absolut).
+# Berhenti lebih awal jika selisih maks-min ≤ nilai ini.
+IMBALANCE_TOLERANCE_MAXMIN = 50
+
+# Penalti default per petugas yang mendapat SubSLS dari lebih dari satu desa.
+# score = gap + DESA_PENALTY × jumlah_petugas_lintas_desa
+DESA_PENALTY_DEFAULT = 500
 
 # =============================================================================
 # CRS SETTINGS
@@ -94,3 +101,4 @@ OUTPUT_MAP_HTML = "peta_partisi.html"
 # Nama kolom wajib di GeoJSON
 COL_KODE_SLS = "kode_sls"
 COL_MUATAN = "muatan"
+COL_MUATAN_GEO = "muatan"  # nama kolom muatan default di GeoJSON

@@ -51,11 +51,23 @@ class BalancedPartitioner:
         Jumlah kelompok (petugas sensus).
     """
 
-    def __init__(self, G: nx.Graph, n_groups: int):
+    def __init__(
+        self,
+        G: nx.Graph,
+        n_groups: int,
+        desa_map: dict | None = None,
+        desa_penalty: float = 0.0,
+    ):
         self.G = G
         self.n_groups = n_groups
         self.nodes = list(G.nodes())
         self.n_nodes = len(self.nodes)
+
+        # Soft constraint: preferensi satu desa per petugas
+        # desa_map: {node_id: nama_desa}
+        # desa_penalty: penalti per petugas yang lintas desa (satuan muatan)
+        self.desa_map = desa_map or {}
+        self.desa_penalty = desa_penalty
 
         # Validasi input
         if n_groups < 1:
@@ -75,6 +87,8 @@ class BalancedPartitioner:
         logger.info(f"  Total muatan    : {self.total_load:,.0f}")
         logger.info(f"  Target per grup : {self.target_load:,.1f}")
         logger.info(f"  Jumlah grup     : {n_groups}")
+        if self.desa_map:
+            logger.info(f"  Desa penalty    : {self.desa_penalty:,.0f} per petugas lintas desa")
 
         # Deteksi komponen (graf bisa tidak fully connected)
         self.components = list(nx.connected_components(G))
@@ -110,27 +124,28 @@ class BalancedPartitioner:
         for restart_idx in range(config.N_RESTARTS):
             try:
                 partition = self._single_run(seed=restart_idx * 31 + 13)
-                score = self._imbalance_cv(partition)
+                score = self._score(partition)
+                gap = self._imbalance_maxmin(partition)
+                violations = self._desa_violations(partition)
 
                 max_load = self._max_load(partition)
                 min_load = self._min_load(partition)
 
+                viol_str = f"  desa_viol={violations}" if self.desa_map else ""
                 logger.info(
                     f"    Restart {restart_idx + 1:2d}: "
-                    f"CV={score:.4f}  "
-                    f"max={max_load:,.0f}  "
-                    f"min={min_load:,.0f}  "
-                    f"selisih={max_load - min_load:,.0f}"
+                    f"Score={score:,.0f}  Gap={gap:,.0f}  "
+                    f"max={max_load:,.0f}  min={min_load:,.0f}{viol_str}"
                 )
 
                 if score < best_score:
                     best_score = score
                     best_partition = partition.copy()
 
-                # Early stopping jika sudah cukup seimbang
-                if score <= config.IMBALANCE_TOLERANCE:
+                # Early stopping: gap sudah cukup kecil DAN tidak ada pelanggaran desa
+                if gap <= config.IMBALANCE_TOLERANCE_MAXMIN and violations == 0:
                     logger.info(
-                        f"  Early stop: CV={score:.4f} ≤ tolerance={config.IMBALANCE_TOLERANCE}"
+                        f"  Early stop: Gap={gap:,.0f} ≤ {config.IMBALANCE_TOLERANCE_MAXMIN}, violations=0"
                     )
                     break
 
@@ -145,8 +160,11 @@ class BalancedPartitioner:
         # Log ringkasan hasil terbaik
         max_load = self._max_load(best_partition)
         min_load = self._min_load(best_partition)
+        best_gap = self._imbalance_maxmin(best_partition)
+        best_viol = self._desa_violations(best_partition)
         logger.info(
-            f"  Hasil terbaik: CV={best_score:.4f}, selisih maks-min = {max_load - min_load:,.0f}"
+            f"  Hasil terbaik: Score={best_score:,.0f}  Gap={best_gap:,.0f}"
+            + (f"  Desa violations={best_viol}" if self.desa_map else "")
         )
 
         return best_partition
@@ -346,17 +364,17 @@ class BalancedPartitioner:
                     continue
 
                 # Evaluasi semua target group dan pilih yang terbaik
-                current_cv = self._imbalance_cv(partition)
+                current_score = self._score(partition)
                 best_target = None
-                best_cv = current_cv - 1e-8  # harus lebih baik dari sekarang
+                best_score = current_score - 1e-8  # harus lebih baik dari sekarang
 
                 for tgt_group in neighbor_groups:
                     # Simulasi pemindahan
                     partition[node] = tgt_group
-                    new_cv = self._imbalance_cv(partition)
+                    new_score = self._score(partition)
 
-                    if new_cv < best_cv:
-                        best_cv = new_cv
+                    if new_score < best_score:
+                        best_score = new_score
                         best_target = tgt_group
 
                     # Kembalikan ke aslinya
@@ -431,16 +449,48 @@ class BalancedPartitioner:
         return loads
 
     def _imbalance_cv(self, partition: Partition) -> float:
-        """
-        Coefficient of Variation (CV) = std / mean.
-        Makin kecil → makin seimbang.
-        CV = 0 berarti semua grup sama persis muatannya.
-        """
+        """Coefficient of Variation (CV) = std / mean. Kept for reference."""
         loads = list(self._compute_group_loads(partition).values())
         mean = np.mean(loads)
         if mean == 0:
             return 0.0
         return float(np.std(loads) / mean)
+
+    def _imbalance_maxmin(self, partition: Partition) -> float:
+        """
+        Selisih absolut max-min muatan antar grup.
+        Makin kecil → distribusi makin merata.
+        0 berarti semua grup sama persis muatannya.
+        """
+        loads = list(self._compute_group_loads(partition).values())
+        if not loads:
+            return 0.0
+        return float(max(loads) - min(loads))
+
+    def _desa_violations(self, partition: Partition) -> int:
+        """
+        Hitung jumlah grup yang punya SubSLS dari lebih dari satu desa.
+        Hanya relevan jika desa_map tersedia.
+        """
+        if not self.desa_map:
+            return 0
+        violations = 0
+        for gid in range(self.n_groups):
+            nodes_in_group = [n for n, g in partition.items() if g == gid]
+            desa_set = {self.desa_map.get(n) for n in nodes_in_group if self.desa_map.get(n)}
+            if len(desa_set) > 1:
+                violations += 1
+        return violations
+
+    def _score(self, partition: Partition) -> float:
+        """
+        Skor gabungan: gap maks-min + (penalti × jumlah petugas lintas desa).
+        Ketika desa_penalty=0, identik dengan _imbalance_maxmin.
+        """
+        gap = self._imbalance_maxmin(partition)
+        if self.desa_penalty > 0 and self.desa_map:
+            return gap + self.desa_penalty * self._desa_violations(partition)
+        return gap
 
     def _max_load(self, partition: Partition) -> float:
         return max(self._compute_group_loads(partition).values())

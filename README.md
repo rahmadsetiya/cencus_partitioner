@@ -1,246 +1,199 @@
 # Sistem Partisi Wilayah Petugas Sensus
 
-Sistem otomatis pembagian SLS (Satuan Lingkungan Setempat) ke petugas sensus,
-mempertimbangkan konektivitas wilayah nyata dan keseimbangan muatan.
+Aplikasi berbasis Streamlit untuk membagi wilayah SubSLS (Sub-Lingkungan Setempat) kepada petugas sensus secara otomatis, mempertimbangkan aksesibilitas geografis dan keseimbangan beban kerja.
 
 ---
 
 ## Fitur Utama
 
-- **Hybrid adjacency**: polygon touching + validasi jarak jalan OSM
-- **Connected partition**: setiap kelompok dijamin terhubung secara geografis
-- **Balanced load**: total muatan antar petugas semaksimal mungkin seimbang
-- **Manual override**: koreksi adjacency dari pengetahuan lapangan via Excel
-- **Visualisasi interaktif**: peta HTML berwarna per petugas
-- **Output Excel**: laporan lengkap per SLS dan per petugas
+- **Pilih area** yang ingin dipartisi berdasarkan kecamatan, desa, SLS, atau SubSLS
+- **Bangun matriks koneksi** antar SubSLS secara otomatis menggunakan jaringan jalan OpenStreetMap (OSM) dan deteksi polygon bersinggungan
+- **Partisi seimbang** — minimisasi selisih beban kerja (muatan) antara petugas yang paling banyak dan paling sedikit
+- **Prioritas satu desa per petugas** — soft constraint opsional agar setiap petugas mendapat wilayah dalam satu desa
+- **Visualisasi peta interaktif** dengan warna per petugas
+- **Download hasil** dalam format Excel dan CSV
 
 ---
 
-## Instalasi
+## Persyaratan
+
+### Dependensi Python
 
 ```bash
-# Clone / copy project ke direktori kerja
-cd census_partitioner/
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-> **Catatan**: `osmnx` membutuhkan internet untuk download data OSM.
-> Jika tidak ada koneksi, sistem akan otomatis fallback ke polygon touching.
+### Format GeoJSON
+
+File GeoJSON harus memiliki kolom-kolom berikut di setiap feature:
+
+| Kolom | Contoh | Keterangan |
+|---|---|---|
+| `idsubsls` | `"7316010018000200"` | Identifier unik SubSLS (wajib) |
+| `Perkiraan_Jumlah_Muatan` | `242.5` | Beban kerja per SubSLS (wajib, nama kolom bisa dikustomisasi) |
+| `nmkec` | `"MAIWA"` | Nama kecamatan (untuk filter area) |
+| `nmdesa` | `"LIMBUANG"` | Nama desa (untuk filter area & prioritas desa) |
+| `nmsls` | `"DUSUN LIMBUANG"` | Nama SLS (untuk filter area & label) |
+| `kdsubsls` | `"01"` | Kode SubSLS (untuk label tooltip peta) |
+
+> **Catatan:** Kolom muatan (`Perkiraan_Jumlah_Muatan`) harus sudah ada di dalam GeoJSON sebelum digunakan. Jika muatan masih di file Excel terpisah, lakukan merge terlebih dahulu menggunakan `idsubsls` sebagai key.
+
+Simpan file GeoJSON ke dalam folder `data/` agar bisa dipilih langsung dari dropdown aplikasi.
 
 ---
 
-## Cara Penggunaan
-
-### Minimal (CLI)
+## Menjalankan Aplikasi
 
 ```bash
-python main.py data/sls_enrekang.geojson 10
+streamlit run app.py
 ```
 
-### Dengan override dan pengaturan lengkap
+Buka browser dan akses **http://localhost:8501**
 
-```bash
-python main.py data/sls.geojson 8 \
-    --override koreksi_lapangan.xlsx \
-    --output-excel hasil_partisi_2026.xlsx \
-    --output-map peta_petugas.html \
-    --epsg 32750 \
-    --restarts 20
+---
+
+## Panduan Penggunaan
+
+### Langkah 1 — Pilih File GeoJSON
+
+Di **sidebar sebelah kiri**, pilih sumber file GeoJSON:
+
+- **Pilih dari /data** — aplikasi otomatis mendeteksi file `.geojson` di folder `data/`. Pilih file dari dropdown.
+- **Upload file** — upload file GeoJSON langsung dari komputer.
+
+Isi kolom **"Kolom muatan di GeoJSON"** sesuai nama kolom muatan di file kamu (default: `Perkiraan_Jumlah_Muatan`).
+
+---
+
+### Langkah 2 — Pilih Area (Tab "Pilih Area")
+
+Buka tab **🗂️ Pilih Area** untuk memilih SubSLS yang akan dipartisi.
+
+Tersedia 4 filter multi-select (pilih salah satu atau kombinasi, kosongkan = semua):
+
+| Filter | Keterangan |
+|---|---|
+| **Kecamatan** | Filter berdasarkan nama kecamatan |
+| **Desa / Kelurahan** | Filter berdasarkan nama desa |
+| **SLS** | Filter berdasarkan nama SLS |
+| **SubSLS (idsubsls)** | Filter berdasarkan kode idsubsls spesifik |
+
+Filter dikombinasikan dengan logika **AND**. Contoh: pilih kecamatan "MAIWA" dan desa "LIMBUANG" → hanya SubSLS yang ada di MAIWA **dan** LIMBUANG yang masuk.
+
+Setelah memilih filter, tampil:
+- **Ringkasan seleksi** — jumlah SubSLS terpilih, total muatan, rata-rata muatan per SubSLS
+- **Preview peta** — warna biru = terpilih, abu = tidak terpilih
+
+---
+
+### Langkah 3 — Atur Parameter
+
+Di sidebar, atur:
+
+| Parameter | Keterangan |
+|---|---|
+| **Jumlah Petugas** | Berapa petugas yang akan bertugas di area terpilih (1–50) |
+
+Di bagian **⚡ Parameter Lanjutan**:
+
+| Parameter | Default | Keterangan |
+|---|---|---|
+| **Jumlah Restart** | 20 | Berapa kali algoritma diulang untuk menemukan solusi terbaik. Makin banyak = hasil lebih baik tapi lebih lama. |
+| **Prioritas satu desa per petugas** | Off | Centang untuk mengaktifkan preferensi agar setiap petugas mendapat SubSLS dari satu desa saja. |
+| **Toleransi lintas desa** | 500 | Muncul jika prioritas desa aktif. Nilai penalti per petugas yang lintas desa. Makin tinggi = makin ketat. Makin rendah = makin longgar (boleh lintas desa jika gap-nya membaik signifikan). |
+
+---
+
+### Langkah 4 — Jalankan Partisi
+
+Klik tombol **▶ Jalankan Partisi** di sidebar.
+
+Proses yang berjalan:
+1. **Bangun matriks koneksi** — download jaringan jalan OSM, snap centroid SubSLS ke node jalan terdekat, hitung jarak antar SubSLS, buat weighted graph
+2. **Partisi** — algoritma multi-start region growing + local search, minimize selisih muatan maks-min
+
+> **Catatan:** Proses download OSM membutuhkan koneksi internet. Jika tidak tersedia, sistem otomatis fallback ke deteksi polygon bersinggungan saja.
+
+---
+
+### Langkah 5 — Lihat Hasil
+
+#### Tab 📊 Hasil Partisi
+
+Menampilkan:
+
+| Metrik | Keterangan |
+|---|---|
+| **Total SLS** | Jumlah SubSLS yang dipartisi |
+| **Petugas** | Jumlah kelompok/petugas |
+| **Maks Muatan** | Muatan petugas dengan beban terberat |
+| **Min Muatan** | Muatan petugas dengan beban teringan |
+| **Gap Muatan** | Selisih maks-min (makin kecil makin baik) |
+| **Lintas Desa** | Jumlah petugas yang mendapat SubSLS dari lebih dari satu desa |
+
+Juga tersedia:
+- **Tabel ringkasan per petugas** — jumlah SLS, total muatan, daftar SLS (nama + kode SubSLS), status konektivitas
+- **Bar chart** distribusi muatan per petugas
+- **Detail per SubSLS** (expandable) — tabel lengkap semua SubSLS dan penugasannya
+
+#### Tab 🗺️ Peta
+
+Peta interaktif dengan warna berbeda per petugas. Hover di atas polygon untuk melihat:
+- `idsubsls`
+- Nama SLS + kode SubSLS
+- Jumlah muatan
+- Nomor petugas
+
+---
+
+### Langkah 6 — Download Hasil
+
+Di tab **Hasil Partisi**, tersedia tombol download:
+
+| Format | Isi |
+|---|---|
+| **Excel (.xlsx)** | Sheet "Ringkasan" (per petugas) + Sheet "Detail SLS" (per SubSLS) |
+| **CSV** | Satu baris per SubSLS: idsubsls, muatan, petugas, group_id |
+
+---
+
+## Struktur Folder
+
 ```
-
-### Generate template override
-
-```bash
-python main.py sls.geojson 1 --generate-template
-```
-
-### Via Python
-
-```python
-from main import run_pipeline
-
-partition = run_pipeline(
-    geojson_path="data/sls_enrekang.geojson",
-    n_officers=10,
-    override_path="koreksi.xlsx",
-    output_excel="hasil.xlsx",
-    output_map="peta.html",
-    epsg_metric=32750,  # UTM Zone 50S (Sulawesi)
-)
-# partition = {'SLS_001': 0, 'SLS_002': 1, ...}
+cencus_partitioner/
+├── app.py                  # Aplikasi Streamlit (entry point)
+├── partitioner.py          # Algoritma partisi utama
+├── matrix_builder.py       # Builder weighted graph dari GeoJSON
+├── adjacency_builder.py    # Deteksi adjacency antar SubSLS
+├── road_network.py         # Handler jaringan jalan OSM
+├── config.py               # Konfigurasi parameter algoritma
+├── requirements.txt        # Dependensi Python
+├── data/                   # Folder untuk file GeoJSON input
+│   └── *.geojson
+└── output/                 # Folder output (untuk CLI)
 ```
 
 ---
 
-## Format Input GeoJSON
+## Konfigurasi Lanjutan (config.py)
 
-File GeoJSON harus berisi **Polygon** atau **MultiPolygon** dengan atribut minimal:
+Parameter di `config.py` bisa disesuaikan untuk hasil yang lebih optimal:
 
-```json
-{
-  "type": "FeatureCollection",
-  "features": [
-    {
-      "type": "Feature",
-      "geometry": { "type": "Polygon", "coordinates": [...] },
-      "properties": {
-        "kode_sls": "1234567890",
-        "muatan": 150
-      }
-    }
-  ]
-}
-```
-
-| Kolom      | Tipe    | Keterangan                           |
-|------------|---------|--------------------------------------|
-| `kode_sls` | string  | Kode unik SLS (bisa numerik atau teks) |
-| `muatan`   | integer | Jumlah rumah tangga / muatan petugas |
+| Parameter | Default | Keterangan |
+|---|---|---|
+| `EPSG_METRIC` | `32750` | UTM zone. Sulawesi/Kalimantan: 32750, Jawa Tengah-Timur/Bali: 32749, Sumatera/Jawa Barat: 32748 |
+| `ROAD_DISTANCE_THRESHOLD_M` | `8000` | Jarak jalan maksimum (meter) untuk membuat edge antar SubSLS |
+| `N_RESTARTS` | `15` | Jumlah restart default algoritma |
+| `IMBALANCE_TOLERANCE_MAXMIN` | `50` | Gap maks-min yang dianggap cukup baik untuk early stop |
+| `DESA_PENALTY_DEFAULT` | `500` | Penalti default per petugas lintas desa |
+| `TOUCHING_ONLY` | `False` | Jika `True`, hanya gunakan polygon touching (tanpa OSM) |
 
 ---
 
-## Format manual_override.xlsx
+## Tips Penggunaan
 
-File Excel dengan dua sheet:
-
-### Sheet `force_connect`
-
-| kode_sls_a | kode_sls_b | catatan                    |
-|------------|------------|----------------------------|
-| SLS_001    | SLS_003    | Akses via jembatan desa    |
-| SLS_015    | SLS_020    | Jalur setapak diketahui    |
-
-### Sheet `force_disconnect`
-
-| kode_sls_a | kode_sls_b | catatan                          |
-|------------|------------|----------------------------------|
-| SLS_007    | SLS_008    | Sungai tanpa jembatan            |
-| SLS_012    | SLS_013    | Akses terputus musim hujan       |
-
----
-
-## Parameter Konfigurasi (config.py)
-
-| Parameter                  | Default  | Keterangan                                          |
-|----------------------------|----------|-----------------------------------------------------|
-| `ROAD_DISTANCE_THRESHOLD_M`| 8000     | Jarak maks antar SLS via jalan (meter)              |
-| `MAX_SNAP_DISTANCE_M`      | 500      | Jarak maks centroid ke node jalan OSM (meter)       |
-| `TOUCHING_ONLY`            | False    | True: hanya polygon touching yang jadi edge         |
-| `N_RESTARTS`               | 15       | Jumlah restart algoritma (lebih banyak = lebih baik)|
-| `MAX_LOCAL_SEARCH_ITER`    | 2000     | Iterasi maksimum local search per restart           |
-| `EPSG_METRIC`              | 32750    | CRS proyeksi metrik (32750=Sulawesi, 32749=Jawa Timur) |
-
----
-
-## Arsitektur Sistem
-
-```
-main.py                    ← Orkestrasi pipeline
-├── data_loader.py         ← Load & validasi GeoJSON
-├── road_network.py        ← Download OSM, snap centroid
-├── adjacency_builder.py   ← Bangun weighted graph
-├── manual_override.py     ← Terapkan koreksi lapangan
-├── partitioner.py         ← Algoritma partisi utama
-├── output_generator.py    ← Export Excel
-├── visualizer.py          ← Peta HTML interaktif
-└── config.py              ← Konfigurasi global
-```
-
-### Algoritma Partisi (partitioner.py)
-
-```
-1. Seed Selection (k-means++ style)
-   └── Pilih n node yang tersebar di seluruh wilayah
-
-2. Region Growing
-   └── Min-heap: selalu ekspansi grup dengan muatan terkecil
-       → mendorong distribusi yang seimbang secara organik
-
-3. Local Search
-   └── Swap boundary nodes antar grup tetangga
-       Constraint: source grup harus tetap connected setelah swap
-       Stop: tidak ada improvement atau max iterasi tercapai
-
-4. Multi-restart (N_RESTARTS kali)
-   └── Simpan solusi dengan Coefficient of Variation (CV) terkecil
-```
-
----
-
-## Pemilihan EPSG (UTM Zone)
-
-| Wilayah                       | EPSG  |
-|-------------------------------|-------|
-| Sulawesi, Kalimantan, Maluku  | 32750 |
-| Jawa Tengah, Timur, Bali, NTB | 32749 |
-| Sumatera, Jawa Barat          | 32748 |
-| Papua                         | 32754 |
-
----
-
-## Output
-
-### `hasil_partisi.xlsx`
-
-- **Sheet Ringkasan**: statistik per petugas (muatan, jumlah SLS, travel cost, status connected)
-- **Sheet Detail SLS**: setiap SLS dengan assignment petugas dan koordinat centroid
-- **Sheet Adjacency Graph**: semua edge dalam graph untuk audit
-
-### `peta_partisi.html`
-
-Peta interaktif (buka di browser):
-- Polygon SLS diwarnai berbeda per petugas
-- Hover: info singkat (kode, muatan, petugas)
-- Klik: detail lengkap
-- Toggle per layer petugas
-- Pilihan basemap: CartoDB, OSM, Satelit
-
----
-
-## Troubleshooting
-
-**OSM download lambat atau gagal**
-
-```python
-# Di config.py, perkecil buffer:
-OSM_BUFFER_DEG = 0.02
-
-# Atau aktifkan polygon-only mode:
-TOUCHING_ONLY = True
-```
-
-**Graf tidak terhubung (disconnected)**
-
-Tambahkan entri `force_connect` di manual_override.xlsx untuk
-menghubungkan SLS yang terisolir secara administratif.
-
-**Keseimbangan kurang optimal**
-
-Tambahkan jumlah restart:
-```bash
-python main.py sls.geojson 10 --restarts 50
-```
-
-**Geometry invalid**
-
-Sistem otomatis mencoba repair. Jika tetap gagal, perbaiki GeoJSON dulu:
-```python
-import geopandas as gpd
-from shapely.validation import make_valid
-gdf = gpd.read_file("sls.geojson")
-gdf.geometry = gdf.geometry.apply(make_valid)
-gdf.to_file("sls_fixed.geojson", driver="GeoJSON")
-```
-
----
-
-## Catatan Lapangan Sensus Indonesia
-
-- OSM di wilayah pedesaan Indonesia seringkali **tidak lengkap**.
-  Sistem sudah punya fallback ke polygon touching.
-- Jarak jalan di OSM bisa **berbeda signifikan** dengan kondisi nyata
-  (jalan rusak, musim hujan). Gunakan manual_override untuk koreksi.
-- Muatan 0 dipertahankan tapi diberi warning — cek kembali datanya.
-- Untuk SE2026: `muatan` biasanya = jumlah usaha/rumah tangga per SLS.
+- **Area kecil (< 50 SubSLS):** Kurangi jumlah restart ke 5–10 agar lebih cepat.
+- **Area besar (> 300 SubSLS):** Tambah restart ke 30–50 untuk hasil lebih optimal.
+- **OSM lambat:** Set `TOUCHING_ONLY = True` di `config.py` untuk skip download OSM.
+- **Prioritas desa:** Mulai dari toleransi 300–500. Jika hasilnya masih banyak lintas desa, naikkan ke 1000–2000.
+- **Gap masih besar:** Tambah jumlah restart atau kurangi jumlah petugas.
