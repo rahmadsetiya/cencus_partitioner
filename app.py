@@ -3,7 +3,9 @@ app.py  —  Sistem Partisi Wilayah Petugas Sensus
 UI berbasis Streamlit. Jalankan dengan: streamlit run app.py
 """
 
+import colorsys
 import io
+import math
 import tempfile
 import traceback
 from pathlib import Path
@@ -123,28 +125,11 @@ except ImportError as e:
 # ── Constants ─────────────────────────────────────────────────────────────────
 DATA_DIR = Path(__file__).parent / "data"
 
-GROUP_COLORS = [
-    "#1d4ed8",
-    "#b45309",
-    "#15803d",
-    "#b91c1c",
-    "#7c3aed",
-    "#0369a1",
-    "#a16207",
-    "#047857",
-    "#9f1239",
-    "#4338ca",
-    "#0891b2",
-    "#c2410c",
-    "#16a34a",
-    "#d97706",
-    "#6d28d9",
-    "#0e7490",
-    "#dc2626",
-    "#059669",
-    "#ea580c",
-    "#7e22ce",
-]
+def get_group_color(gid: int, n_total: int) -> str:
+    """Generate warna HSL terdistribusi merata untuk n_total kelompok."""
+    h = (gid / max(n_total, 1)) % 1.0
+    r, g, b = colorsys.hls_to_rgb(h, 0.42, 0.72)
+    return f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
 
 # Kolom hierarki yang diharapkan ada di GeoJSON
 COL_KEC = "nmkec"
@@ -282,10 +267,12 @@ def make_partition_map(
     gdf: gpd.GeoDataFrame,
     partition: dict,
     G: nx.Graph,
+    n_total: int,
     selected_groups: set | None = None,
 ) -> tuple[str, bytes]:
     """
     Buat peta partisi. Kembalikan (html_string, html_bytes) untuk render + export.
+    n_total: jumlah total grup (untuk generate warna yang tidak bertabrakan).
     selected_groups: set of group_id (0-indexed) yang ditampilkan penuh.
                      None = tampilkan semua. Grup lain ditampilkan abu transparan.
     """
@@ -303,7 +290,7 @@ def make_partition_map(
 
             is_selected = selected_groups is None or gid in selected_groups
             if is_selected:
-                color = GROUP_COLORS[gid % len(GROUP_COLORS)] if gid >= 0 else "#64748b"
+                color = get_group_color(gid, n_total) if gid >= 0 else "#64748b"
                 fill_opacity = 0.65
                 weight = 1.5
                 border = "#ffffff"
@@ -389,6 +376,88 @@ def apply_edge_edits(
     return G, {"deleted": deleted, "reweighted": reweighted}
 
 
+def build_graph_from_matrix(
+    gdf: gpd.GeoDataFrame,
+    df_matrix: pd.DataFrame,
+    muatan_col: str,
+) -> tuple[nx.Graph | None, list[str], str | None]:
+    """
+    Build NetworkX graph dari GeoDataFrame + matriks koneksi manual.
+
+    df_matrix harus punya kolom: idsubsls_a, idsubsls_b, bobot (opsional).
+    Returns (G, warnings, error_message).
+    """
+    required = {"idsubsls_a", "idsubsls_b"}
+    missing = required - set(df_matrix.columns)
+    if missing:
+        return None, [], f"Kolom wajib tidak ditemukan di matriks: {', '.join(sorted(missing))}"
+
+    if COL_SUBSLS not in gdf.columns:
+        return None, [], f"Kolom '{COL_SUBSLS}' tidak ditemukan di GeoJSON."
+    if muatan_col not in gdf.columns:
+        return None, [], f"Kolom muatan '{muatan_col}' tidak ditemukan di GeoJSON."
+
+    G = nx.Graph()
+    for _, row in gdf.iterrows():
+        node = str(row[COL_SUBSLS])
+        G.add_node(node, muatan=float(row.get(muatan_col, 0)), idsubsls=node)
+
+    valid_nodes = set(G.nodes())
+    has_bobot = "bobot" in df_matrix.columns
+    n_skip = 0
+    for _, row in df_matrix.iterrows():
+        a = str(row["idsubsls_a"]).strip()
+        b = str(row["idsubsls_b"]).strip()
+        if a == b:
+            continue
+        if a not in valid_nodes or b not in valid_nodes:
+            n_skip += 1
+            continue
+        bobot = (
+            float(row["bobot"])
+            if has_bobot and pd.notna(row.get("bobot"))
+            else 1.0
+        )
+        G.add_edge(a, b, weight=max(bobot, 0.001), road_dist_m=-1, is_touching=False)
+
+    warns: list[str] = []
+    if n_skip > 0:
+        warns.append(
+            f"{n_skip} baris di matriks dilewati "
+            "(idsubsls_a atau idsubsls_b tidak ada di area terpilih)."
+        )
+    isolated = list(nx.isolates(G))
+    if isolated:
+        sample = ", ".join(isolated[:5]) + ("..." if len(isolated) > 5 else "")
+        warns.append(
+            f"{len(isolated)} SubSLS tidak memiliki koneksi di matriks (isolated): {sample}"
+        )
+    return G, warns, None
+
+
+def make_matrix_template(gdf: gpd.GeoDataFrame | None) -> bytes:
+    """Buat template Excel untuk matriks koneksi manual."""
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        df_tpl = pd.DataFrame(
+            [
+                {"idsubsls_a": "7316010018000100", "idsubsls_b": "7316010018000200", "bobot": 1.0},
+                {"idsubsls_a": "7316010018000200", "idsubsls_b": "7316010018000300", "bobot": 1.5},
+            ]
+        )
+        df_tpl.to_excel(w, sheet_name="Matriks Koneksi", index=False)
+        if gdf is not None and COL_SUBSLS in gdf.columns:
+            ref_cols = [COL_SUBSLS]
+            for c in ["nmsls", "nmdesa", "nmkec"]:
+                if c in gdf.columns:
+                    ref_cols.append(c)
+            gdf[ref_cols].rename(columns={COL_SUBSLS: "idsubsls"}).to_excel(
+                w, sheet_name="Daftar SubSLS", index=False
+            )
+    buf.seek(0)
+    return buf.read()
+
+
 def run_partition(
     G: nx.Graph,
     n_officers: int,
@@ -469,10 +538,55 @@ with st.sidebar:
         uploaded_file = st.file_uploader("Upload GeoJSON", type=["geojson", "json"])
 
     st.divider()
+    st.markdown('<div class="sb-title">Sumber Matriks Koneksi</div>', unsafe_allow_html=True)
+
+    matrix_source = st.radio(
+        "Sumber matriks",
+        ["Build otomatis (OSM + polygon)", "Upload matriks manual"],
+        label_visibility="collapsed",
+    )
+
+    uploaded_matrix = None
+    if matrix_source == "Upload matriks manual":
+        st.caption(
+            "Excel/CSV dengan kolom `idsubsls_a`, `idsubsls_b`, `bobot` (opsional). "
+            "Download template di bawah."
+        )
+        uploaded_matrix = st.file_uploader(
+            "Upload matriks koneksi",
+            type=["xlsx", "csv"],
+            key="matrix_upload",
+        )
+        gdf_tpl = st.session_state.get("gdf_raw")
+        st.download_button(
+            "⬇️ Download Template",
+            data=make_matrix_template(gdf_tpl),
+            file_name="template_matriks_koneksi.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+    st.divider()
     st.markdown('<div class="sb-title">Parameter</div>', unsafe_allow_html=True)
 
     muatan_col_input = st.text_input("Kolom muatan di GeoJSON", value="Perkiraan_Jumlah_Muatan")
-    n_officers = st.number_input("Jumlah Petugas", min_value=1, max_value=50, value=5, step=1)
+    n_officers = st.number_input("Jumlah Petugas", min_value=1, max_value=1000, value=5, step=1)
+
+    target_muatan = st.number_input(
+        "Target muatan per petugas",
+        min_value=0,
+        value=0,
+        step=50,
+        help="Opsional. Jika diisi, app menghitung saran jumlah petugas dari total muatan ÷ target.",
+    )
+    _gdf_sb = st.session_state.get("gdf_raw")
+    if target_muatan > 0 and _gdf_sb is not None and muatan_col_input in _gdf_sb.columns:
+        _total_sb = float(_gdf_sb[muatan_col_input].sum())
+        _n_saran = math.ceil(_total_sb / target_muatan)
+        st.info(
+            f"Total muatan: **{_total_sb:,.0f}**  \n"
+            f"Saran petugas: **{_n_saran}** *(= ⌈{_total_sb:,.0f} ÷ {target_muatan:,}⌉)*"
+        )
 
     with st.expander("⚡ Parameter Lanjutan"):
         n_restarts = st.slider("Jumlah Restart", 5, 50, 20)
@@ -655,16 +769,40 @@ if run_btn:
         st.error(f"❌ Kolom muatan `{muatan_col}` tidak ditemukan di GeoJSON.")
         st.stop()
 
-    prog = st.progress(0, "Membangun connection matrix (OSM + polygon touching)...")
-    try:
-        builder = AutoMatrixBuilder(gdf_filtered)
-        G, err = builder.build_from_geojson(muatan_col=muatan_col)
-        if err:
-            st.error(f"❌ Matrix builder: {err}")
+    if matrix_source == "Upload matriks manual":
+        if uploaded_matrix is None:
+            st.error("❌ Upload file matriks koneksi dulu (sidebar → Sumber Matriks Koneksi).")
             st.stop()
-    except Exception as e:
-        st.error(f"❌ Matrix builder: {type(e).__name__}: {e}\n```\n{traceback.format_exc()}\n```")
-        st.stop()
+        prog = st.progress(0, "Membaca matriks koneksi manual...")
+        try:
+            if uploaded_matrix.name.lower().endswith(".csv"):
+                df_matrix = pd.read_csv(uploaded_matrix)
+            else:
+                df_matrix = pd.read_excel(uploaded_matrix, sheet_name=0)
+        except Exception as e:
+            st.error(f"❌ Gagal membaca matriks: {e}")
+            st.stop()
+        G, matrix_warns, err = build_graph_from_matrix(gdf_filtered, df_matrix, muatan_col)
+        if err:
+            st.error(f"❌ Matriks: {err}")
+            st.stop()
+        for w in matrix_warns:
+            st.warning(f"⚠ {w}")
+    else:
+        prog = st.progress(0, "Membangun connection matrix (OSM + polygon touching)...")
+        try:
+            builder = AutoMatrixBuilder(gdf_filtered)
+            G, err = builder.build_from_geojson(muatan_col=muatan_col)
+            if err:
+                st.error(f"❌ Matrix builder: {err}")
+                st.stop()
+            # Simpan EPSG yang terdeteksi untuk ditampilkan
+            st.session_state["detected_epsg"] = getattr(builder, "_detected_epsg", None)
+        except Exception as e:
+            st.error(
+                f"❌ Matrix builder: {type(e).__name__}: {e}\n```\n{traceback.format_exc()}\n```"
+            )
+            st.stop()
 
     prog.progress(50, f"Mempartisi {G.number_of_nodes()} SubSLS ke {n_officers} petugas...")
     try:
@@ -688,7 +826,12 @@ if run_btn:
     st.session_state["muatan_col"] = muatan_col
 
     prog.progress(100, "Selesai!")
-    st.success("✅ Partisi berhasil! Buka tab **Edit Koneksi**, **Hasil Partisi**, atau **Peta**.")
+    _epsg_info = st.session_state.get("detected_epsg")
+    _epsg_str = f" · EPSG auto-detect: **{_epsg_info}**" if _epsg_info else ""
+    st.success(
+        f"✅ Partisi berhasil! {_epsg_str} · "
+        "Buka tab **Edit Koneksi**, **Hasil Partisi**, atau **Peta**."
+    )
 
 # ── TAB 2: EDIT KONEKSI ───────────────────────────────────────────────────────
 with tab2:
@@ -855,20 +998,27 @@ with tab3:
             if gdf_f2 is not None and "nmdesa" in gdf_f2.columns
             else "—"
         )
-        cols = st.columns(6)
-        for col, lbl, val, sub in zip(
-            cols,
-            ["Total SLS", "Petugas", "Maks Muatan", "Min Muatan", "Gap Muatan", "Lintas Desa"],
-            [G.number_of_nodes(), n_off, max(loads), min(loads), f"{int(gap_):,}", viol_label],
-            [
-                "node",
-                "kelompok",
-                f"target {mean_:.0f}",
-                f"min {min(loads):,}",
-                "maks − min (↓ lebih baik)",
-                "petugas lintas desa (↓ lebih baik)",
-            ],
-        ):
+        # Metric cards — tambah "Target Muatan" jika diset
+        _metric_labels = ["Total SLS", "Petugas", "Maks Muatan", "Min Muatan", "Gap Muatan", "Lintas Desa"]
+        _metric_vals = [G.number_of_nodes(), n_off, max(loads), min(loads), f"{int(gap_):,}", viol_label]
+        _metric_subs = [
+            "node",
+            "kelompok",
+            f"target {mean_:.0f}",
+            f"min {min(loads):,}",
+            "maks − min (↓ lebih baik)",
+            "petugas lintas desa (↓ lebih baik)",
+        ]
+        if target_muatan > 0:
+            _n_dalam_target = sum(
+                1 for s in stats if abs(s["Total Muatan"] - target_muatan) / target_muatan <= 0.10
+            )
+            _metric_labels.append("Target Muatan")
+            _metric_vals.append(f"{target_muatan:,}")
+            _metric_subs.append(f"{_n_dalam_target} dari {n_off} petugas ±10%")
+
+        cols = st.columns(len(_metric_labels))
+        for col, lbl, val, sub in zip(cols, _metric_labels, _metric_vals, _metric_subs):
             with col:
                 st.markdown(
                     f"""
@@ -898,17 +1048,19 @@ with tab3:
         tbl = []
         for s in stats:
             labels = [node_label(n) for n in s["SLS List"]]
-            tbl.append(
-                {
-                    "Petugas": s["Petugas"],
-                    "Jml SLS": s["Jml SLS"],
-                    "Total Muatan": f"{s['Total Muatan']:,}",
-                    "Min SLS": s["Min SLS"],
-                    "Max SLS": s["Max SLS"],
-                    "Connected": "✓ Ya" if s["Connected"] else "✗ Tidak",
-                    "Daftar SLS": ", ".join(labels[:4]) + ("..." if len(labels) > 4 else ""),
-                }
-            )
+            row_d = {
+                "Petugas": s["Petugas"],
+                "Jml SLS": s["Jml SLS"],
+                "Total Muatan": f"{s['Total Muatan']:,}",
+                "Min SLS": s["Min SLS"],
+                "Max SLS": s["Max SLS"],
+                "Connected": "✓ Ya" if s["Connected"] else "✗ Tidak",
+                "Daftar SLS": ", ".join(labels[:4]) + ("..." if len(labels) > 4 else ""),
+            }
+            if target_muatan > 0:
+                pct = (s["Total Muatan"] - target_muatan) / target_muatan * 100
+                row_d["vs Target"] = f"{pct:+.1f}%"
+            tbl.append(row_d)
         st.dataframe(pd.DataFrame(tbl), use_container_width=True, hide_index=True)
 
         st.markdown('<div class="c-section">Distribusi Muatan</div>', unsafe_allow_html=True)
@@ -991,22 +1143,22 @@ with tab4:
             {s["group_id"] for s in stats if s["Petugas"] in sel_officers} if sel_officers else None
         )
 
-        # Legenda chips (hanya petugas terpilih)
+        # Legenda chips (hanya petugas terpilih, cap 50)
+        shown_stats = [s for s in stats if s["Petugas"] in sel_officers]
         chips = "".join(
-            [
-                f'<span class="leg-chip" style="background:{GROUP_COLORS[s["group_id"] % len(GROUP_COLORS)]};">'
-                f"{s['Petugas']} &middot; {s['Jml SLS']} SLS &middot; {s['Total Muatan']:,}"
-                f"</span>"
-                for s in stats
-                if s["Petugas"] in sel_officers
-            ]
+            f'<span class="leg-chip" style="background:{get_group_color(s["group_id"], n_off)};">'
+            f"{s['Petugas']} &middot; {s['Jml SLS']} SLS &middot; {s['Total Muatan']:,}"
+            f"</span>"
+            for s in shown_stats[:50]
         )
         if chips:
             st.markdown(f"<div style='margin-bottom:12px;'>{chips}</div>", unsafe_allow_html=True)
+        if len(shown_stats) > 50:
+            st.caption(f"... dan {len(shown_stats) - 50} petugas lainnya tidak ditampilkan di legenda.")
 
         with st.spinner("Membuat peta partisi..."):
             html_str, html_bytes = make_partition_map(
-                gdf_filtered, partition, G, selected_groups=selected_gids
+                gdf_filtered, partition, G, n_total=n_off, selected_groups=selected_gids
             )
         st.components.v1.html(html_str, height=560)
 

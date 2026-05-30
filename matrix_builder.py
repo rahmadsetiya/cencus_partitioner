@@ -20,6 +20,20 @@ from road_network import RoadNetworkHandler
 logger = logging.getLogger(__name__)
 
 
+def detect_epsg(gdf: gpd.GeoDataFrame) -> int:
+    """
+    Auto-detect EPSG UTM zone dari centroid longitude GeoJSON.
+    Batas: Sumatera/Jawa Barat <108°, Jawa Tengah-Timur/Bali/NTB 108–115°, sisanya ≥115°.
+    """
+    lon = gdf.to_crs(epsg=4326).geometry.centroid.x.mean()
+    if lon < 108:
+        return 32748
+    elif lon < 115:
+        return 32749
+    else:
+        return 32750
+
+
 class AutoMatrixBuilder:
     """
     Auto-generate weighted accessibility graph dari GeoJSON + muatan data.
@@ -143,6 +157,16 @@ class AutoMatrixBuilder:
                 return None, f"Kolom muatan '{muatan_col}' tidak ditemukan di GeoJSON."
             if idsubsls_col not in self.gdf.columns:
                 return None, f"Kolom '{idsubsls_col}' tidak ditemukan di GeoJSON."
+
+            # Auto-detect EPSG dari centroid GeoJSON — tidak perlu ubah config.py manual
+            detected_epsg = detect_epsg(self.gdf)
+            if detected_epsg != config.EPSG_METRIC:
+                logger.info(
+                    f"=[AutoMatrixBuilder] Auto-detect EPSG: {detected_epsg} "
+                    f"(sebelumnya config={config.EPSG_METRIC})"
+                )
+                config.EPSG_METRIC = detected_epsg
+            self._detected_epsg = detected_epsg
 
             # Gunakan idsubsls sebagai node identifier (kompatibel dengan AdjacencyBuilder)
             self.gdf[config.COL_KODE_SLS] = self.gdf[idsubsls_col].astype(str)

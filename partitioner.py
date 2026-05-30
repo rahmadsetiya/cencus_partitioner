@@ -203,19 +203,25 @@ class BalancedPartitioner:
         # Node pertama: random dari semua node
         seeds.append(random.choice(self.nodes))
 
-        # Cache jarak shortest path (komputasi berat, lakukan sekali)
-        # Gunakan Euclidean-fallback jika centroid tersedia
+        # Untuk efisiensi pada k besar: batasi kandidat ke sample acak.
+        # Untuk k kecil (≤ 50 kandidat) tetap evaluasi semua.
+        # Ini turunkan kompleksitas dari O(k²·n·Dijkstra) ke O(k·min(n,MAX_CAND)·Dijkstra).
+        MAX_CAND = max(50, self.n_groups)
+
         while len(seeds) < self.n_groups:
             max_min_dist = -1.0
             chosen_node = None
 
-            candidates = [n for n in self.nodes if n not in seeds]
-            random.shuffle(candidates)
+            pool = [n for n in self.nodes if n not in seeds]
+            candidates = (
+                random.sample(pool, min(len(pool), MAX_CAND))
+                if len(pool) > MAX_CAND
+                else pool
+            )
 
-            # Untuk efisiensi, hitung jarak ke seed terdekat per node
             for candidate in candidates:
                 min_dist = min(self._graph_distance(candidate, s) for s in seeds)
-                # Tambahkan noise proporsional untuk variasi
+                # Tambahkan noise proporsional untuk variasi antar restart
                 noisy_dist = min_dist * (0.85 + 0.30 * random.random())
 
                 if noisy_dist > max_min_dist:

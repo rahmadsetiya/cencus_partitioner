@@ -225,38 +225,33 @@ class AdjacencyBuilder:
 
     def _get_road_proximity_pairs(self) -> list[tuple[str, str]]:
         """
-        Generate pasangan SLS yang centroidnya dalam ROAD_DISTANCE_THRESHOLD
-        (menggunakan Euclidean distance sebagai pre-filter sebelum road distance).
+        Generate pasangan SLS yang centroidnya dalam ROAD_DISTANCE_THRESHOLD.
 
-        Ini adalah pre-filter cepat — road distance aktual dihitung
-        di build_graph() untuk pasangan yang lolos pre-filter.
+        Menggunakan STRtree buffer query — O(n log n) bukan O(n²).
         """
-        proximity_pairs = []
+        from shapely.geometry import Point
+        from shapely.strtree import STRtree
 
-        # Gunakan centroid dalam CRS metrik untuk estimasi jarak
-        centroids = {}
-        for _, row in self.gdf_proj.iterrows():
-            kode = row[config.COL_KODE_SLS]
-            centroids[kode] = np.array(
-                [
-                    row.geometry.centroid.x,
-                    row.geometry.centroid.y,
-                ]
-            )
-
-        kodes = list(centroids.keys())
         threshold = config.ROAD_DISTANCE_THRESHOLD_M
-
-        # Faktor ekspansi: jarak Euclidean bisa lebih kecil dari road distance
-        # (jalan tidak selalu lurus). Gunakan faktor 0.5 sebagai pre-filter.
+        # Faktor 0.5: Euclidean pre-filter sebelum road distance aktual
         euclidean_threshold = threshold * 0.5
 
-        for i in range(len(kodes)):
-            for j in range(i + 1, len(kodes)):
-                kode_a, kode_b = kodes[i], kodes[j]
-                dist_euclid = np.linalg.norm(centroids[kode_a] - centroids[kode_b])
-                if dist_euclid <= euclidean_threshold:
-                    proximity_pairs.append((kode_a, kode_b))
+        kodes = []
+        centroid_pts = []
+        for _, row in self.gdf_proj.iterrows():
+            kodes.append(row[config.COL_KODE_SLS])
+            centroid_pts.append(row.geometry.centroid)
+
+        # Buffer tiap centroid, lalu query STRtree untuk overlap
+        buffered = [pt.buffer(euclidean_threshold) for pt in centroid_pts]
+        tree = STRtree(buffered)
+
+        proximity_pairs = []
+        for idx_a, buf_a in enumerate(buffered):
+            for idx_b in tree.query(buf_a):
+                if idx_b <= idx_a:
+                    continue
+                proximity_pairs.append((kodes[idx_a], kodes[idx_b]))
 
         return proximity_pairs
 
