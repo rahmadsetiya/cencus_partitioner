@@ -244,62 +244,60 @@ class BalancedPartitioner:
 
     def _region_growing(self, seeds: list[str]) -> Partition:
         """
-        Tumbuhkan region dari seed menggunakan priority queue.
+        Tumbuhkan region dari seed menggunakan per-group frontier heap.
 
         Strategi:
-        - Min-heap berisi (load_grup, group_id, node_kandidat, edge_weight)
-        - Selalu ekspansi dari grup dengan total muatan TERKECIL
-        - Sehingga distribusi muatan cenderung seimbang
-
-        Edge weight digunakan sebagai tiebreaker:
-        edge lebih ringan = akses lebih mudah → diprioritaskan.
+        - Satu heap per grup berisi (edge_weight, tiebreak, candidate)
+        - Setiap langkah: pilih grup dengan muatan TERKECIL SAAT INI,
+          lalu ekspansi candidate terbaik dari frontier grup itu
+        - Menghindari bug "stale priority" heap tunggal di mana grup yang
+          sudah berat terus mengambil node karena entry lama-nya punya
+          prioritas rendah
         """
         partition: Partition = {}
         group_loads = [0.0] * self.n_groups
 
-        # Assign seed nodes ke masing-masing group
         for group_id, seed in enumerate(seeds):
             partition[seed] = group_id
             group_loads[group_id] += self.node_loads[seed]
 
-        # Inisialisasi frontier priority queue
-        # Format: (group_load, random_tiebreak, group_id, candidate, edge_weight)
-        frontier: list[tuple] = []
         unassigned: set[str] = set(self.nodes) - set(seeds)
 
+        # Per-group frontier: heap of (edge_weight, tiebreak, candidate)
+        frontiers: list[list] = [[] for _ in range(self.n_groups)]
         for group_id, seed in enumerate(seeds):
             for neighbor in self.G.neighbors(seed):
                 if neighbor in unassigned:
                     edge_w = self.G[seed][neighbor].get("weight", 1.0)
-                    # random untuk memecah tie secara acak (variasi antar restart)
-                    heapq.heappush(
-                        frontier,
-                        (group_loads[group_id], random.random(), group_id, neighbor, edge_w),
-                    )
+                    heapq.heappush(frontiers[group_id], (edge_w, random.random(), neighbor))
 
-        # Loop ekspansi
-        while unassigned and frontier:
-            load, _, group_id, candidate, edge_w = heapq.heappop(frontier)
+        while unassigned:
+            # Drain stale entries, lalu pilih grup terkecil yang punya frontier aktif
+            chosen_group = -1
+            chosen_load = float("inf")
+            for g in range(self.n_groups):
+                while frontiers[g] and frontiers[g][0][2] not in unassigned:
+                    heapq.heappop(frontiers[g])
+                if frontiers[g] and group_loads[g] < chosen_load:
+                    chosen_load = group_loads[g]
+                    chosen_group = g
 
-            # Skip jika sudah di-assign (bisa masuk frontier beberapa kali)
+            if chosen_group == -1:
+                break
+
+            _, _, candidate = heapq.heappop(frontiers[chosen_group])
             if candidate not in unassigned:
                 continue
 
-            # Assign candidate ke group terkecil
-            partition[candidate] = group_id
-            group_loads[group_id] += self.node_loads[candidate]
+            partition[candidate] = chosen_group
+            group_loads[chosen_group] += self.node_loads[candidate]
             unassigned.remove(candidate)
 
-            # Tambahkan tetangga candidate ke frontier
             for neighbor in self.G.neighbors(candidate):
                 if neighbor in unassigned:
                     edge_w = self.G[candidate][neighbor].get("weight", 1.0)
-                    heapq.heappush(
-                        frontier,
-                        (group_loads[group_id], random.random(), group_id, neighbor, edge_w),
-                    )
+                    heapq.heappush(frontiers[chosen_group], (edge_w, random.random(), neighbor))
 
-        # Handle node yang tidak terjangkau dari frontier (isolated)
         if unassigned:
             self._assign_isolated_nodes(unassigned, partition, group_loads)
 
@@ -335,53 +333,74 @@ class BalancedPartitioner:
         Sebuah node bisa dipindah jika:
         1. Node berada di batas dua grup berbeda (boundary node)
         2. Source grup tetap CONNECTED setelah node dipindah
-           (node bukan articulation point di source grup)
-        3. Pemindahan mengurangi imbalance score (CV)
+        3. Pemindahan mengurangi score
 
-        Loop terus hingga tidak ada improvement atau batas iterasi tercapai.
+        Optimasi: group_loads dipertahankan secara inkremental sehingga
+        evaluasi gap cukup O(groups), bukan O(n) per kandidat.
         """
         partition = partition.copy()
+        # Maintain group loads inkremental — hindari O(n) _score() di inner loop
+        group_loads: dict[int, float] = self._compute_group_loads(partition)
 
         for iteration in range(config.MAX_LOCAL_SEARCH_ITER):
             improved = False
-
-            # Identifikasi boundary nodes
             boundary = self._get_boundary_nodes(partition)
-            random.shuffle(boundary)  # hindari bias posisi
+            random.shuffle(boundary)
 
             for node in boundary:
                 src_group = partition[node]
+                node_load = self.node_loads[node]
 
-                # Grup tetangga yang berbeda
                 neighbor_groups = {
                     partition[nb] for nb in self.G.neighbors(node) if partition[nb] != src_group
                 }
                 if not neighbor_groups:
                     continue
 
-                # Cek apakah node ini bisa dipindah tanpa memutus source group
                 if not self._is_removable(node, src_group, partition):
                     continue
 
-                # Evaluasi semua target group dan pilih yang terbaik
-                current_score = self._score(partition)
+                src_load = group_loads[src_group]
+                loads_vals = list(group_loads.values())
+                current_gap = max(loads_vals) - min(loads_vals)
+                current_score = (
+                    current_gap + self.desa_penalty * self._desa_violations(partition)
+                    if self.desa_penalty > 0 and self.desa_map
+                    else current_gap
+                )
+
                 best_target = None
-                best_score = current_score - 1e-8  # harus lebih baik dari sekarang
+                best_score = current_score - 1e-8
 
                 for tgt_group in neighbor_groups:
-                    # Simulasi pemindahan
-                    partition[node] = tgt_group
-                    new_score = self._score(partition)
+                    tgt_load = group_loads[tgt_group]
+                    # Simulasi gap secara O(groups) tanpa menyentuh partition dict
+                    group_loads[src_group] = src_load - node_load
+                    group_loads[tgt_group] = tgt_load + node_load
+                    new_gap = max(group_loads.values()) - min(group_loads.values())
+                    group_loads[src_group] = src_load
+                    group_loads[tgt_group] = tgt_load
+
+                    if self.desa_penalty > 0 and self.desa_map:
+                        # Full score hanya jika gap-nya menjanjikan (early filter)
+                        if new_gap <= current_gap + self.desa_penalty:
+                            partition[node] = tgt_group
+                            new_score = new_gap + self.desa_penalty * self._desa_violations(
+                                partition
+                            )
+                            partition[node] = src_group
+                        else:
+                            new_score = new_gap
+                    else:
+                        new_score = new_gap
 
                     if new_score < best_score:
                         best_score = new_score
                         best_target = tgt_group
 
-                    # Kembalikan ke aslinya
-                    partition[node] = src_group
-
-                # Terapkan perpindahan terbaik
                 if best_target is not None:
+                    group_loads[src_group] -= node_load
+                    group_loads[best_target] += node_load
                     partition[node] = best_target
                     improved = True
 

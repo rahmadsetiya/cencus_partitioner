@@ -349,10 +349,83 @@ def make_partition_map(
         return err, err.encode("utf-8")
 
 
+# ── Helper: Build edge DataFrame untuk data_editor ────────────────────────────
+def build_edge_df(G: nx.Graph, label_map: dict) -> pd.DataFrame:
+    rows = []
+    for u, v, data in G.edges(data=True):
+        road_m = data.get("road_dist_m", -1)
+        rows.append(
+            {
+                "_u": u,
+                "_v": v,
+                "Node A": label_map.get(u, u),
+                "Node B": label_map.get(v, v),
+                "Jarak Jalan (km)": round(road_m / 1000, 2) if road_m > 0 else None,
+                "Touching": bool(data.get("is_touching", False)),
+                "Bobot": round(float(data.get("weight", 1.0)), 3),
+                "Putuskan": False,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def apply_edge_edits(
+    G_original: nx.Graph, df_edited: pd.DataFrame, df_original: pd.DataFrame
+) -> tuple[nx.Graph, dict]:
+    G = G_original.copy()
+    # Lookup berdasarkan key (u,v) — tahan sorting tabel oleh user
+    orig_bobot: dict = {(row["_u"], row["_v"]): row["Bobot"] for _, row in df_original.iterrows()}
+    deleted = reweighted = 0
+    for _, row in df_edited.iterrows():
+        u, v = row["_u"], row["_v"]
+        if not G.has_edge(u, v):
+            continue
+        if row["Putuskan"]:
+            G.remove_edge(u, v)
+            deleted += 1
+        elif abs(row["Bobot"] - orig_bobot.get((u, v), row["Bobot"])) > 1e-6:
+            G[u][v]["weight"] = row["Bobot"]
+            reweighted += 1
+    return G, {"deleted": deleted, "reweighted": reweighted}
+
+
+def run_partition(
+    G: nx.Graph,
+    n_officers: int,
+    prioritas_desa: bool,
+    desa_penalty: int,
+    gdf_filtered: gpd.GeoDataFrame,
+) -> tuple[dict, list]:
+    if config:
+        config.N_RESTARTS = st.session_state.get("_restarts", 20)
+    desa_map = None
+    if prioritas_desa and gdf_filtered is not None and "nmdesa" in gdf_filtered.columns:
+        desa_map = dict(
+            zip(gdf_filtered[COL_SUBSLS].astype(str), gdf_filtered["nmdesa"].astype(str))
+        )
+    p = BalancedPartitioner(G, n_groups=n_officers, desa_map=desa_map, desa_penalty=desa_penalty)
+    partition = p.run()
+    return partition, compute_stats(G, partition, n_officers)
+
+
 # ── Session state init ────────────────────────────────────────────────────────
-for k in ["gdf_raw", "gdf_filtered", "G", "partition", "n_officers", "stats", "muatan_col"]:
+for k in [
+    "gdf_raw",
+    "gdf_filtered",
+    "G",
+    "G_original",
+    "G_edited",
+    "edit_summary",
+    "edge_df",
+    "partition",
+    "n_officers",
+    "stats",
+    "muatan_col",
+]:
     if k not in st.session_state:
         st.session_state[k] = None
+if "edge_df_key" not in st.session_state:
+    st.session_state["edge_df_key"] = 0
 
 # ── HEADER ────────────────────────────────────────────────────────────────────
 st.markdown(
@@ -452,7 +525,7 @@ sel_sls: list = []
 sel_subsls: list = []
 
 # ── TABS ──────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs(["🗂️ Pilih Area", "📊 Hasil Partisi", "🗺️ Peta"])
+tab1, tab2, tab3, tab4 = st.tabs(["🗂️ Pilih Area", "🔗 Edit Koneksi", "📊 Hasil Partisi", "🗺️ Peta"])
 
 # ── TAB 1: Pilih Area ─────────────────────────────────────────────────────────
 with tab1:
@@ -584,8 +657,6 @@ if run_btn:
 
     prog = st.progress(0, "Membangun connection matrix (OSM + polygon touching)...")
     try:
-        if config:
-            config.N_RESTARTS = st.session_state.get("_restarts", 20)
         builder = AutoMatrixBuilder(gdf_filtered)
         G, err = builder.build_from_geojson(muatan_col=muatan_col)
         if err:
@@ -597,34 +668,168 @@ if run_btn:
 
     prog.progress(50, f"Mempartisi {G.number_of_nodes()} SubSLS ke {n_officers} petugas...")
     try:
-        desa_map = None
-        if prioritas_desa and "nmdesa" in gdf_filtered.columns:
-            desa_map = dict(
-                zip(gdf_filtered[COL_SUBSLS].astype(str), gdf_filtered["nmdesa"].astype(str))
-            )
-        p = BalancedPartitioner(
-            G, n_groups=n_officers, desa_map=desa_map, desa_penalty=desa_penalty
+        partition, stats_new = run_partition(
+            G, n_officers, prioritas_desa, desa_penalty, gdf_filtered
         )
-        partition = p.run()
     except Exception as e:
         st.error(f"❌ Partisi: {type(e).__name__}: {e}\n```\n{traceback.format_exc()}\n```")
         st.stop()
 
     st.session_state["G"] = G
+    st.session_state["G_original"] = G.copy()
+    st.session_state["G_edited"] = None
+    st.session_state["edit_summary"] = None
+    st.session_state["edge_df"] = None
+    st.session_state["edge_df_key"] = st.session_state.get("edge_df_key", 0) + 1
     st.session_state["partition"] = partition
     st.session_state["n_officers"] = n_officers
     st.session_state["gdf_filtered"] = gdf_filtered
-    st.session_state["stats"] = compute_stats(G, partition, n_officers)
+    st.session_state["stats"] = stats_new
     st.session_state["muatan_col"] = muatan_col
 
     prog.progress(100, "Selesai!")
-    st.success("✅ Partisi berhasil! Buka tab **Hasil Partisi** dan **Peta**.")
+    st.success("✅ Partisi berhasil! Buka tab **Edit Koneksi**, **Hasil Partisi**, atau **Peta**.")
 
-# ── TAB 2: HASIL PARTISI ──────────────────────────────────────────────────────
+# ── TAB 2: EDIT KONEKSI ───────────────────────────────────────────────────────
 with tab2:
+    G_orig = st.session_state.get("G_original")
+    gdf_fe = st.session_state.get("gdf_filtered")
+
+    if G_orig is None:
+        st.info("⬆️ Jalankan Partisi dulu untuk membangun matriks koneksi.")
+    else:
+        # Build label_map dari gdf_filtered
+        lmap: dict = {}
+        if gdf_fe is not None and "nmsls" in gdf_fe.columns and "kdsubsls" in gdf_fe.columns:
+            for _, row in gdf_fe.iterrows():
+                key = str(row.get(COL_SUBSLS, ""))
+                nama = str(row.get("nmsls", ""))
+                kd = str(row.get("kdsubsls", ""))
+                lmap[key] = f"{nama} ({kd})" if nama else key
+
+        # Inisialisasi edge_df sekali dari G_original
+        if st.session_state["edge_df"] is None:
+            st.session_state["edge_df"] = build_edge_df(G_orig, lmap)
+
+        n_nodes = G_orig.number_of_nodes()
+        n_edges = G_orig.number_of_edges()
+
+        st.markdown(
+            '<div class="c-section">Matriks Koneksi Antar SubSLS</div>', unsafe_allow_html=True
+        )
+        st.caption(
+            f"Graph: **{n_nodes}** node · **{n_edges}** edge. "
+            "Centang **Putuskan ❌** untuk memutus koneksi yang tidak bisa diakses di lapangan, "
+            "atau ubah nilai **Bobot** untuk menyesuaikan tingkat kesulitan akses."
+        )
+
+        if n_edges > 500:
+            st.warning(f"⚠ Tabel memiliki {n_edges:,} edge. Gunakan sorting kolom untuk navigasi.")
+
+        edge_df_key = st.session_state["edge_df_key"]
+        edited_df = st.data_editor(
+            st.session_state["edge_df"],
+            key=f"edge_editor_{edge_df_key}",
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "_u": None,
+                "_v": None,
+                "Node A": st.column_config.TextColumn("Node A", disabled=True),
+                "Node B": st.column_config.TextColumn("Node B", disabled=True),
+                "Jarak Jalan (km)": st.column_config.NumberColumn(
+                    "Jarak Jalan (km)", disabled=True, format="%.2f"
+                ),
+                "Touching": st.column_config.CheckboxColumn("Touching", disabled=True),
+                "Bobot": st.column_config.NumberColumn(
+                    "Bobot", min_value=0.0, max_value=9999.0, format="%.3f"
+                ),
+                "Putuskan": st.column_config.CheckboxColumn("Putuskan ❌"),
+            },
+        )
+
+        # Ringkasan perubahan tertunda
+        n_putus = int(edited_df["Putuskan"].sum())
+        n_ubah = int((abs(edited_df["Bobot"] - st.session_state["edge_df"]["Bobot"]) > 1e-6).sum())
+        if n_putus > 0 or n_ubah > 0:
+            st.caption(
+                f"Perubahan tertunda: **{n_putus}** edge akan diputuskan · "
+                f"**{n_ubah}** edge diubah bobotnya."
+            )
+
+        bc1, bc2 = st.columns(2)
+
+        with bc1:
+            if st.button("🔄 Reset ke Original", use_container_width=True):
+                st.session_state["edge_df"] = build_edge_df(G_orig, lmap)
+                st.session_state["edge_df_key"] += 1
+                st.session_state["G_edited"] = None
+                st.session_state["edit_summary"] = None
+                st.session_state["G"] = G_orig.copy()
+                st.session_state["stats"] = compute_stats(
+                    G_orig,
+                    st.session_state["partition"],
+                    st.session_state["n_officers"],
+                )
+                st.rerun()
+
+        with bc2:
+            if st.button("✅ Terapkan & Partisi Ulang", type="primary", use_container_width=True):
+                G_edit, summary = apply_edge_edits(G_orig, edited_df, st.session_state["edge_df"])
+
+                # Warning jika penghapusan edge menciptakan komponen terpisah
+                components = list(nx.connected_components(G_edit))
+                if len(components) > 1:
+                    comp_sizes = sorted([len(c) for c in components], reverse=True)
+                    small_nodes = sum(comp_sizes[1:])
+                    size_str = " + ".join(str(s) for s in comp_sizes[1:])
+                    st.warning(
+                        f"⚠ Penghapusan edge membuat graph terpecah menjadi "
+                        f"**{len(components)} komponen** terpisah "
+                        f"({comp_sizes[0]} + {size_str} SubSLS). "
+                        f"**{small_nodes} SubSLS** di komponen kecil akan mendapat kelompok "
+                        "petugas tersendiri, terpisah dari area utama."
+                    )
+
+                n_off_edit = st.session_state["n_officers"]
+                gdf_fc = st.session_state.get("gdf_filtered")
+
+                with st.spinner("Menjalankan partisi ulang..."):
+                    try:
+                        partition_new, stats_new = run_partition(
+                            G_edit, n_off_edit, prioritas_desa, desa_penalty, gdf_fc
+                        )
+                    except Exception as e:
+                        st.error(f"❌ Partisi gagal: {type(e).__name__}: {e}")
+                        st.stop()
+
+                st.session_state["G"] = G_edit
+                st.session_state["G_edited"] = G_edit
+                st.session_state["edit_summary"] = summary
+                st.session_state["partition"] = partition_new
+                st.session_state["stats"] = stats_new
+                st.success(
+                    f"✅ Partisi ulang selesai! "
+                    f"**{summary['deleted']}** edge diputuskan, "
+                    f"**{summary['reweighted']}** edge diubah bobotnya. "
+                    "Buka tab **Hasil Partisi**."
+                )
+
+# ── TAB 3: HASIL PARTISI ──────────────────────────────────────────────────────
+with tab3:
     if st.session_state["partition"] is None:
         st.info("Belum ada hasil. Jalankan partisi dulu.")
     else:
+        edit_summary = st.session_state.get("edit_summary")
+        if edit_summary:
+            st.info(
+                f"ℹ️ Hasil dari matriks yang **diedit**: "
+                f"**{edit_summary['deleted']}** edge diputuskan · "
+                f"**{edit_summary['reweighted']}** edge diubah bobotnya."
+            )
+        else:
+            st.caption("Hasil dari matriks original (belum diedit).")
+
         G = st.session_state["G"]
         partition = st.session_state["partition"]
         n_off = st.session_state["n_officers"]
@@ -761,8 +966,8 @@ with tab2:
                 use_container_width=True,
             )
 
-# ── TAB 3: PETA ───────────────────────────────────────────────────────────────
-with tab3:
+# ── TAB 4: PETA ───────────────────────────────────────────────────────────────
+with tab4:
     if st.session_state["partition"] is None:
         st.info("Belum ada hasil. Jalankan partisi dulu.")
     elif st.session_state["gdf_filtered"] is None:
